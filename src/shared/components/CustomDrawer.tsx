@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -21,6 +21,32 @@ const DRAWER_WIDTH = width * 0.75;
 
 const CustomDrawer = ({ isOpen, onClose, navigation }: any) => {
   const translateX = useRef(new Animated.Value(-DRAWER_WIDTH)).current;
+
+  const [user, setUser] = useState({
+    name: '',
+    about: '',
+    image: '',
+  });
+
+  useEffect(() => {
+    const fetchUser = async () => {
+      try {
+        const userStr = await AsyncStorage.getItem('user');
+        if (userStr) {
+          const parsed = JSON.parse(userStr);
+          setUser({
+            name: parsed.name || 'Guest',
+            about: parsed.about || 'Available',
+            image: parsed.image || '',
+          });
+        }
+      } catch (e) {
+        console.error('Failed to load user from storage:', e);
+      }
+    };
+
+    fetchUser();
+  }, []);
 
   useEffect(() => {
     Animated.timing(translateX, {
@@ -48,29 +74,18 @@ const CustomDrawer = ({ isOpen, onClose, navigation }: any) => {
     () => [
       { label: 'New group', icon: 'people-outline', screen: 'NewGroup' },
       { label: 'New community', icon: 'earth-outline', screen: 'NewCommunity' },
-      {
-        label: 'New broadcast',
-        icon: 'megaphone-outline',
-        screen: 'NewBroadcast',
-      },
-      {
-        label: 'Linked devices',
-        icon: 'laptop-outline',
-        screen: 'LinkedDevices',
-      },
+      { label: 'New broadcast', icon: 'megaphone-outline', screen: 'NewBroadcast' },
+      { label: 'Linked devices', icon: 'laptop-outline', screen: 'LinkedDevices' },
       { label: 'Starred', icon: 'star-outline', screen: 'Starred' },
       { label: 'Payments', icon: 'card-outline', screen: 'Payments' },
       { label: 'Read all', icon: 'mail-open-outline', screen: 'ReadAll' },
       { label: 'Settings', icon: 'settings-outline', screen: 'Settings' },
     ],
-    [],
+    []
   );
 
   return (
-    <View
-      style={StyleSheet.absoluteFill}
-      pointerEvents={isOpen ? 'auto' : 'none'}
-    >
+    <View style={StyleSheet.absoluteFill} pointerEvents={isOpen ? 'auto' : 'none'}>
       <TouchableWithoutFeedback onPress={onClose}>
         <View style={[styles.backdrop, { opacity: isOpen ? 1 : 0 }]} />
       </TouchableWithoutFeedback>
@@ -78,13 +93,20 @@ const CustomDrawer = ({ isOpen, onClose, navigation }: any) => {
       <Animated.View style={[styles.drawer, { transform: [{ translateX }] }]}>
         <SafeAreaView style={styles.safeArea}>
           <View style={styles.profileContainer}>
-            <Image
-              source={{ uri: 'https://i.pravatar.cc/300' }}
-              style={styles.profileImage}
-            />
+            <View style={styles.profileImageWrapper}>
+              <Image
+                source={{
+                  uri: user.image || 'https://i.pravatar.cc/300',
+                }}
+                style={styles.profileImage}
+                onError={() =>
+                  setUser(prev => ({ ...prev, image: 'https://i.pravatar.cc/300' }))
+                }
+              />
+            </View>
             <View>
-              <Text style={styles.userName}>Sahil Kumar</Text>
-              <Text style={styles.userAbout}>Available</Text>
+              <Text style={styles.userName}>{user.name}</Text>
+              <Text style={styles.userAbout}>{user.about}</Text>
             </View>
           </View>
 
@@ -168,6 +190,11 @@ const styles = StyleSheet.create({
     gap: 10,
     alignItems: 'center',
     marginBottom: theme.spacing.m,
+  },
+  profileImageWrapper: {
+    position: 'relative',
+    width: 80,
+    height: 80,
   },
   profileImage: {
     width: 80,
