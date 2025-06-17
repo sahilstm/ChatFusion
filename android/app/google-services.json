@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "562550462847",
+    "project_id": "chatfusion-3c890",
+    "storage_bucket": "chatfusion-3c890.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:562550462847:android:31047e0711b15ee46a224a",
+        "android_client_info": {
+          "package_name": "com.chatfusion"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBpGy5PVfZSvePogClbyodQ0OhHnLPeANw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
