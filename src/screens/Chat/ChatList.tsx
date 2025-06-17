@@ -6,14 +6,23 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
+  Animated,
+  Easing,
+  Image,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from '../../utils/axiosInstance';
 import moment from 'moment';
+import theme from '../../shared/constant/theme';
+import Ionicons from 'react-native-vector-icons/Ionicons';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import CustomDrawer from '../../shared/components/CustomDrawer';
 
 const ChatList = ({ navigation }: any) => {
   const [chats, setChats] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const fadeAnim = useState(new Animated.Value(0))[0];
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   const fetchChats = async () => {
     const user = await AsyncStorage.getItem('user');
@@ -23,7 +32,6 @@ const ChatList = ({ navigation }: any) => {
     try {
       const { data } = await axios.get(`/chat/list/${_id}`);
       setChats(data.chatList);
-      console.log(data.chatList);
     } catch (err) {
       console.error('Error fetching chat list', err);
     } finally {
@@ -33,6 +41,13 @@ const ChatList = ({ navigation }: any) => {
 
   useEffect(() => {
     fetchChats();
+
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 500,
+      easing: Easing.out(Easing.ease),
+      useNativeDriver: true,
+    }).start();
   }, []);
 
   const renderItem = ({ item }: any) => (
@@ -63,69 +78,152 @@ const ChatList = ({ navigation }: any) => {
     </TouchableOpacity>
   );
 
-  if (loading)
+  if (loading) {
     return (
-      <ActivityIndicator style={{ flex: 1 }} size="large" color="#007bff" />
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color={theme.colors.primary} />
+      </View>
     );
+  }
 
   return (
-    <View style={styles.container}>
-      <Text style={{ fontSize: 24, fontWeight: 'bold', margin: 16 }}>
-        Chat List
-      </Text>
-      <FlatList
-        data={chats}
-        renderItem={renderItem}
-        keyExtractor={item => item._id}
+    <SafeAreaView style={styles.safeArea}>
+      <CustomDrawer
+        isOpen={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        navigation={navigation}
       />
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => navigation.navigate('Contacts')}
-      >
-        <Text>New</Text>
-      </TouchableOpacity>
-    </View>
+
+      <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
+        <View style={styles.header}>
+          <View style={styles.headerLeft}>
+            <Image
+              source={require('../../assets/logo.png')}
+              style={styles.logo}
+              resizeMode="contain"
+            />
+            <Text style={styles.appName}>ChatFusion</Text>
+          </View>
+
+          <TouchableOpacity
+            onPress={() => setDrawerOpen(true)}
+            style={{ padding: 16 }}
+          >
+            <Ionicons name="menu-outline" size={26} color="black" />
+          </TouchableOpacity>
+        </View>
+
+        <FlatList
+          data={chats}
+          renderItem={renderItem}
+          keyExtractor={item => item._id}
+          contentContainerStyle={{ paddingBottom: 80 }}
+        />
+
+        <TouchableOpacity
+          style={styles.fab}
+          onPress={() => navigation.navigate('Contacts')}
+        >
+          <Ionicons
+            name="chatbubble-ellipses-outline"
+            size={24}
+            color="white"
+          />
+        </TouchableOpacity>
+      </Animated.View>
+    </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
-  chatItem: {
+  safeArea: { flex: 1, backgroundColor: theme.colors.background },
+  container: {
+    flex: 1,
+    paddingHorizontal: theme.spacing.m,
+  },
+  header: {
     flexDirection: 'row',
-    padding: 16,
-    borderBottomWidth: 0.5,
-    borderColor: '#ccc',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginVertical: theme.spacing.m,
+  },
+  headerLeft: {
+    flexDirection: 'row',
     alignItems: 'center',
   },
+  logo: {
+    width: 32,
+    height: 32,
+    marginRight: 8,
+  },
+  appName: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: theme.colors.text,
+  },
+  chatItem: {
+    flexDirection: 'row',
+    padding: theme.spacing.m,
+    marginBottom: theme.spacing.s,
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+  },
   avatar: {
-    backgroundColor: '#007bff',
+    backgroundColor: theme.colors.primary,
     width: 48,
     height: 48,
     borderRadius: 24,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  avatarText: { color: 'white', fontSize: 18, fontWeight: 'bold' },
-  textContainer: { flex: 1, paddingHorizontal: 12 },
-  name: { fontSize: 16, fontWeight: 'bold' },
-  message: { color: '#555', marginTop: 2 },
-  rightContainer: { alignItems: 'flex-end' },
-  time: { fontSize: 12, color: '#666' },
+  avatarText: {
+    color: theme.colors.primary,
+    fontWeight: '700',
+    fontSize: 18,
+  },
+  textContainer: {
+    flex: 1,
+    paddingHorizontal: theme.spacing.s,
+  },
+  name: {
+    fontSize: theme.fontSizes.body,
+    fontWeight: '600',
+    color: theme.colors.text,
+  },
+  message: {
+    color: theme.colors.subtext,
+    fontSize: theme.fontSizes.caption,
+    marginTop: 2,
+  },
+  rightContainer: {
+    alignItems: 'flex-end',
+  },
+  time: {
+    fontSize: 12,
+    color: theme.colors.subtext,
+  },
   fab: {
     position: 'absolute',
     right: 20,
     bottom: 30,
-    backgroundColor: '#007bff',
+    backgroundColor: theme.colors.primary,
     width: 56,
     height: 56,
     borderRadius: 28,
     justifyContent: 'center',
     alignItems: 'center',
-    elevation: 5,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
+    elevation: 6,
+    shadowColor: theme.colors.dark,
+    shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.3,
-    shadowRadius: 3,
+    shadowRadius: 4,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: theme.colors.background,
   },
 });
 
