@@ -23,6 +23,12 @@ const ChatList = ({ navigation }: any) => {
   const [loading, setLoading] = useState(true);
   const fadeAnim = useState(new Animated.Value(0))[0];
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [filter, setFilter] = useState('All');
+  const [counts, setCounts] = useState({
+    unread: 0,
+    favorites: 0,
+    groups: 0,
+  });
 
   const fetchChats = async () => {
     const user = await AsyncStorage.getItem('user');
@@ -32,6 +38,18 @@ const ChatList = ({ navigation }: any) => {
     try {
       const { data } = await axios.get(`/chat/list/${_id}`);
       setChats(data.chatList);
+
+      const unread = data.chatList.filter(
+        (chat: { read: any }) => !chat.read,
+      ).length;
+      const favorites = data.chatList.filter(
+        (chat: { favorite: any }) => chat.favorite,
+      ).length;
+      const groups = data.chatList.filter(
+        (chat: { isGroup: any }) => chat.isGroup,
+      ).length;
+
+      setCounts({ unread, favorites, groups });
     } catch (err) {
       console.error('Error fetching chat list', err);
     } finally {
@@ -49,6 +67,22 @@ const ChatList = ({ navigation }: any) => {
       useNativeDriver: true,
     }).start();
   }, []);
+
+  const filters = [
+    { label: 'All', key: 'All' },
+    { label: 'Unread', key: 'Unread', count: counts.unread },
+    { label: 'Favorites', key: 'Favorites', count: counts.favorites },
+    { label: 'Groups', key: 'Groups', count: counts.groups },
+    { label: '+', key: 'Add' },
+  ];
+
+  const filteredChats = chats.filter(chat => {
+    if (filter === 'All') return true;
+    if (filter === 'Unread') return !chat.read;
+    if (filter === 'Favorites') return chat.favorite;
+    if (filter === 'Groups') return chat.isGroup;
+    return true;
+  });
 
   const renderItem = ({ item }: any) => (
     <TouchableOpacity
@@ -74,6 +108,11 @@ const ChatList = ({ navigation }: any) => {
         <Text style={styles.time}>
           {item.timestamp ? moment(item.timestamp).fromNow() : ''}
         </Text>
+        {!item.read && (
+          <View style={styles.unreadBadge}>
+            <Text style={styles.unreadText}>1</Text>
+          </View>
+        )}
       </View>
     </TouchableOpacity>
   );
@@ -113,8 +152,31 @@ const ChatList = ({ navigation }: any) => {
           </TouchableOpacity>
         </View>
 
+        <View style={styles.filterBar}>
+          {filters.map(({ label, key, count }) => (
+            <TouchableOpacity
+              key={key}
+              style={[
+                styles.filterButton,
+                filter === key && styles.activeFilterButton,
+              ]}
+              onPress={() => setFilter(key)}
+            >
+              <Text
+                style={[
+                  styles.filterText,
+                  filter === key && styles.activeFilterText,
+                ]}
+              >
+                {label}
+                {typeof count === 'number' && count > 0 ? ` ${count}` : ''}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
         <FlatList
-          data={chats}
+          data={filteredChats}
           renderItem={renderItem}
           keyExtractor={item => item._id}
           contentContainerStyle={{ paddingBottom: 80 }}
@@ -145,7 +207,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginVertical: theme.spacing.m,
   },
   headerLeft: {
     flexDirection: 'row',
@@ -160,6 +221,32 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: 'bold',
     color: theme.colors.text,
+  },
+  filterBar: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    paddingVertical: 10,
+    marginVertical: 6,
+  },
+  filterButton: {
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    marginRight: 8,
+    marginBottom: 8,
+  },
+  activeFilterButton: {
+    backgroundColor: theme.colors.primary,
+    borderColor: theme.colors.primary,
+  },
+  filterText: {
+    fontSize: theme.fontSizes.caption,
+    color: theme.colors.text,
+  },
+  activeFilterText: {
+    color: '#fff',
   },
   chatItem: {
     flexDirection: 'row',
@@ -178,7 +265,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   avatarText: {
-    color: theme.colors.primary,
+    color: theme.colors.white,
     fontWeight: '700',
     fontSize: 18,
   },
@@ -203,6 +290,20 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: theme.colors.subtext,
   },
+  unreadBadge: {
+    backgroundColor: theme.colors.primary,
+    borderRadius: 10,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    marginTop: 4,
+    alignSelf: 'flex-end',
+  },
+  unreadText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: 'bold',
+  },
+
   fab: {
     position: 'absolute',
     right: 20,
