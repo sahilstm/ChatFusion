@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { View, ActivityIndicator } from 'react-native';
 import axios from './src/utils/axiosInstance';
 
 import LoginScreen from './src/screens/auth/Login';
@@ -10,20 +9,34 @@ import VerifyOTPScreen from './src/screens/auth/VerifyOTP';
 import ChatList from './src/screens/Chat/ChatList';
 import ContactsScreen from './src/screens/Contact/Contacts';
 import ChatScreen from './src/screens/Chat/ChatScreen';
+import Splash from './src/screens/Splash/Splash';
+
 import {
   createNotificationChannel,
   requestUserPermission,
   setupForegroundMessageHandler,
 } from './src/config/NotificationService';
 
-const Stack = createNativeStackNavigator();
+export type RootStackParamList = {
+  Login: undefined;
+  VerifyOTP: undefined;
+  ChatList: undefined;
+  Contacts: undefined;
+  Chat: { conversationId?: string };
+};
 
-const App = () => {
-  const [initialRoute, setInitialRoute] = useState<string | null>(null);
+const Stack = createNativeStackNavigator<RootStackParamList>();
+
+const App: React.FC = () => {
+  const [initialRoute, setInitialRoute] = useState<
+    keyof RootStackParamList | null
+  >(null);
+  const [showSplash, setShowSplash] = useState<boolean>(true);
 
   const saveFcmToken = async () => {
     const token = await requestUserPermission();
-    const user = JSON.parse((await AsyncStorage.getItem('user')) || '{}');
+    const userString = await AsyncStorage.getItem('user');
+    const user = userString ? JSON.parse(userString) : null;
 
     if (!user?._id || !token) return;
 
@@ -34,16 +47,16 @@ const App = () => {
         userId: user._id,
         fcmToken: token,
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error(
         'Failed to save FCM token',
-        error.response?.data || error.message,
+        error?.response?.data || error.message,
       );
     }
   };
 
   useEffect(() => {
-    const checkLogin = async () => {
+    const timer = setTimeout(async () => {
       try {
         const token = await AsyncStorage.getItem('token');
         const user = await AsyncStorage.getItem('user');
@@ -56,10 +69,12 @@ const App = () => {
       } catch (e) {
         console.error('Error checking AsyncStorage', e);
         setInitialRoute('Login');
+      } finally {
+        setShowSplash(false);
       }
-    };
+    }, 3000);
 
-    checkLogin();
+    return () => clearTimeout(timer);
   }, []);
 
   useEffect(() => {
@@ -68,12 +83,8 @@ const App = () => {
     setupForegroundMessageHandler();
   }, []);
 
-  if (!initialRoute) {
-    return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-        <ActivityIndicator size="large" color="blue" />
-      </View>
-    );
+  if (showSplash || !initialRoute) {
+    return <Splash />;
   }
 
   return (
@@ -94,8 +105,16 @@ const App = () => {
           component={ChatList}
           options={{ headerShown: false }}
         />
-        <Stack.Screen name="Chat" component={ChatScreen} />
-        <Stack.Screen name="Contacts" component={ContactsScreen} />
+        <Stack.Screen
+          name="Chat"
+          component={ChatScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="Contacts"
+          component={ContactsScreen}
+          options={{ headerShown: false }}
+        />
       </Stack.Navigator>
     </NavigationContainer>
   );
