@@ -17,6 +17,7 @@ import {
   requestUserPermission,
   setupForegroundMessageHandler,
 } from './src/config/NotificationService';
+import ProfileSetupScreen from './src/screens/auth/ProfileSetup';
 
 export type RootStackParamList = {
   Login: undefined;
@@ -60,10 +61,15 @@ const App: React.FC = () => {
     const timer = setTimeout(async () => {
       try {
         const token = await AsyncStorage.getItem('token');
-        const user = await AsyncStorage.getItem('user');
+        const userStr = await AsyncStorage.getItem('user');
+        const user = userStr ? JSON.parse(userStr) : null;
 
         if (token && user) {
-          setInitialRoute('ChatList');
+          if (!user.name || !user.about) {
+            setInitialRoute('ProfileSetup');
+          } else {
+            setInitialRoute('ChatList');
+          }
         } else {
           setInitialRoute('Login');
         }
@@ -99,6 +105,11 @@ const App: React.FC = () => {
         <Stack.Screen
           name="VerifyOTP"
           component={VerifyOTPScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="ProfileSetup"
+          component={ProfileSetupScreen}
           options={{ headerShown: false }}
         />
         <Stack.Screen

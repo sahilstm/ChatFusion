@@ -10,7 +10,6 @@ import {
   TouchableWithoutFeedback,
   Keyboard,
   Vibration,
-  Alert,
 } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import messaging from '@react-native-firebase/messaging';
@@ -25,6 +24,7 @@ import axios from '../../utils/axiosInstance';
 type RootStackParamList = {
   VerifyOTP: { phone: string };
   ChatList: undefined;
+  ProfileSetup: undefined;
 };
 
 type Props = NativeStackScreenProps<RootStackParamList, 'VerifyOTP'>;
@@ -75,7 +75,8 @@ const VerifyOTPScreen: React.FC<Props> = ({ route, navigation }) => {
     setTimer(180);
     intervalRef.current = setInterval(() => {
       setTimer(prev => {
-        if (prev <= 1 && intervalRef.current) clearInterval(intervalRef.current);
+        if (prev <= 1 && intervalRef.current)
+          clearInterval(intervalRef.current);
         return prev - 1;
       });
     }, 1000);
@@ -100,10 +101,26 @@ const VerifyOTPScreen: React.FC<Props> = ({ route, navigation }) => {
 
   const triggerShake = () => {
     Animated.sequence([
-      Animated.timing(shakeAnim, { toValue: 10, duration: 100, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: -10, duration: 100, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 6, duration: 100, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 0, duration: 100, useNativeDriver: true }),
+      Animated.timing(shakeAnim, {
+        toValue: 10,
+        duration: 100,
+        useNativeDriver: true,
+      }),
+      Animated.timing(shakeAnim, {
+        toValue: -10,
+        duration: 100,
+        useNativeDriver: true,
+      }),
+      Animated.timing(shakeAnim, {
+        toValue: 6,
+        duration: 100,
+        useNativeDriver: true,
+      }),
+      Animated.timing(shakeAnim, {
+        toValue: 0,
+        duration: 100,
+        useNativeDriver: true,
+      }),
     ]).start();
   };
 
@@ -133,7 +150,11 @@ const VerifyOTPScreen: React.FC<Props> = ({ route, navigation }) => {
     try {
       setLoading(true);
       const fcmToken = await messaging().getToken();
-      const res = await axios.post('/auth/verify-otp', { phone, otp, fcmToken });
+      const res = await axios.post('/auth/verify-otp', {
+        phone,
+        otp,
+        fcmToken,
+      });
 
       const { token, user } = res.data;
       await AsyncStorage.setItem('token', token);
@@ -144,7 +165,11 @@ const VerifyOTPScreen: React.FC<Props> = ({ route, navigation }) => {
         fcmToken,
       });
 
-      navigation.replace('ChatList');
+      if (!user.name || !user.about || !user.image) {
+        navigation.replace('ProfileSetup');
+      } else {
+        navigation.replace('ChatList');
+      }
     } catch (err: any) {
       const message =
         err.response?.data?.twoFactorResponse?.Details === 'OTP Expired'
@@ -174,14 +199,19 @@ const VerifyOTPScreen: React.FC<Props> = ({ route, navigation }) => {
           <View style={styles.ellipse2} />
           <View style={styles.ellipse3} />
 
-          <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-            <Animated.View style={[styles.cardContainer, { opacity: fadeAnim }]}>
-            <Animated.Image
+          <ScrollView
+            contentContainerStyle={styles.scroll}
+            keyboardShouldPersistTaps="handled"
+          >
+            <Animated.View
+              style={[styles.cardContainer, { opacity: fadeAnim }]}
+            >
+              <Animated.Image
                 source={require('../../assets/logo.png')}
                 style={[styles.logo, { transform: [{ scale: logoAnim }] }]}
                 resizeMode="contain"
               />
-            <Animated.Text
+              <Animated.Text
                 style={[
                   styles.heading,
                   {
@@ -189,7 +219,8 @@ const VerifyOTPScreen: React.FC<Props> = ({ route, navigation }) => {
                     opacity: fadeAnim,
                   },
                 ]}
-              >Enter OTP sent to
+              >
+                Enter OTP sent to
               </Animated.Text>
               <Text style={styles.subheading}>+91 {phone}</Text>
 
