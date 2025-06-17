@@ -9,6 +9,8 @@ import {
   Animated,
   Easing,
   Image,
+  PermissionsAndroid,
+  Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from '../../utils/axiosInstance';
@@ -17,6 +19,7 @@ import theme from '../../shared/constant/theme';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import CustomDrawer from '../../shared/components/CustomDrawer';
+import Contacts from 'react-native-contacts';
 
 const ChatList = ({ navigation }: any) => {
   const [chats, setChats] = useState<any[]>([]);
@@ -29,6 +32,7 @@ const ChatList = ({ navigation }: any) => {
     favorites: 0,
     groups: 0,
   });
+  const [contactMap, setContactMap] = useState<{ [phone: string]: string }>({});
 
   const fetchChats = async () => {
     const user = await AsyncStorage.getItem('user');
@@ -56,8 +60,39 @@ const ChatList = ({ navigation }: any) => {
       setLoading(false);
     }
   };
+  const normalizePhoneNumber = (number: string) => {
+    return number.replace(/[^\d]/g, '').slice(-10);
+  };
+
+  const loadContacts = async () => {
+    try {
+      if (Platform.OS === 'android') {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.READ_CONTACTS,
+        );
+        if (granted !== PermissionsAndroid.RESULTS.GRANTED) return;
+      }
+
+      const contacts = await Contacts.getAll();
+      const map: { [cleanedNumber: string]: string } = {};
+
+      contacts.forEach(contact => {
+        contact.phoneNumbers.forEach(pn => {
+          const cleaned = normalizePhoneNumber(pn.number);
+          if (cleaned) {
+            map[cleaned] = contact.displayName || contact.givenName || '';
+          }
+        });
+      });
+
+      setContactMap(map);
+    } catch (error) {
+      console.error('Failed to load contacts', error);
+    }
+  };
 
   useEffect(() => {
+    loadContacts();
     fetchChats();
 
     Animated.timing(fadeAnim, {
@@ -84,38 +119,47 @@ const ChatList = ({ navigation }: any) => {
     return true;
   });
 
-  const renderItem = ({ item }: any) => (
-    <TouchableOpacity
-      style={styles.chatItem}
-      onPress={() =>
-        navigation.navigate('Chat', {
-          user: { _id: item.participantId, name: item.name, phone: item.phone },
-        })
-      }
-    >
-      <View style={styles.avatar}>
-        <Text style={styles.avatarText}>{item.name?.[0]}</Text>
-      </View>
+  const renderItem = ({ item }: any) => {
+    const cleanedPhone = normalizePhoneNumber(item.phone);
+    const displayName = contactMap[cleanedPhone] || item.name || item.phone;
 
-      <View style={styles.textContainer}>
-        <Text style={styles.name}>{item.name}</Text>
-        <Text numberOfLines={1} style={styles.message}>
-          {item.lastMessage}
-        </Text>
-      </View>
+    return (
+      <TouchableOpacity
+        style={styles.chatItem}
+        onPress={() =>
+          navigation.navigate('Chat', {
+            user: {
+              _id: item.participantId,
+              name: displayName,
+              phone: item.phone,
+            },
+          })
+        }
+      >
+        <View style={styles.avatar}>
+          <Text style={styles.avatarText}>{displayName?.[0]}</Text>
+        </View>
 
-      <View style={styles.rightContainer}>
-        <Text style={styles.time}>
-          {item.timestamp ? moment(item.timestamp).fromNow() : ''}
-        </Text>
-        {!item.read && (
-          <View style={styles.unreadBadge}>
-            <Text style={styles.unreadText}>1</Text>
-          </View>
-        )}
-      </View>
-    </TouchableOpacity>
-  );
+        <View style={styles.textContainer}>
+          <Text style={styles.name}>{displayName}</Text>
+          <Text numberOfLines={1} style={styles.message}>
+            {item.lastMessage}
+          </Text>
+        </View>
+
+        <View style={styles.rightContainer}>
+          <Text style={styles.time}>
+            {item.timestamp ? moment(item.timestamp).fromNow() : ''}
+          </Text>
+          {!item.read && (
+            <View style={styles.unreadBadge}>
+              <Text style={styles.unreadText}>1</Text>
+            </View>
+          )}
+        </View>
+      </TouchableOpacity>
+    );
+  };
 
   if (loading) {
     return (
@@ -207,6 +251,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
   },
   headerLeft: {
     flexDirection: 'row',
@@ -303,7 +349,6 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: 'bold',
   },
-
   fab: {
     position: 'absolute',
     right: 20,

@@ -1,18 +1,21 @@
 import React, { useEffect, useState } from 'react';
 import {
   View,
-  FlatList,
+  SectionList,
   Text,
   TouchableOpacity,
   PermissionsAndroid,
   Platform,
   Alert,
   StyleSheet,
+  ActivityIndicator,
 } from 'react-native';
 import Contacts from 'react-native-contacts';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from '../../utils/axiosInstance';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
+import Ionicons from 'react-native-vector-icons/Ionicons';
+import theme from '../../shared/constant/theme';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 type Props = NativeStackScreenProps<any, 'Contacts'>;
 
@@ -24,8 +27,13 @@ interface Contact {
   _id?: string;
 }
 
+interface Section {
+  title: string;
+  data: Contact[];
+}
+
 const ContactsScreen: React.FC<Props> = ({ navigation }) => {
-  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [sections, setSections] = useState<Section[]>([]);
   const [loading, setLoading] = useState(false);
 
   const fetchAndFilter = async () => {
@@ -100,7 +108,20 @@ const ContactsScreen: React.FC<Props> = ({ navigation }) => {
         return contact;
       });
 
-      setContacts(merged);
+      const sorted = merged.sort((a, b) => a.name.localeCompare(b.name));
+      const grouped: Record<string, Contact[]> = {};
+
+      sorted.forEach(contact => {
+        const firstLetter = contact.name.charAt(0).toUpperCase();
+        if (!grouped[firstLetter]) grouped[firstLetter] = [];
+        grouped[firstLetter].push(contact);
+      });
+
+      const sectionListData: Section[] = Object.keys(grouped)
+        .sort()
+        .map(letter => ({ title: letter, data: grouped[letter] }));
+
+      setSections(sectionListData);
     } catch (err) {
       console.error('Contacts error', err);
       Alert.alert('Error fetching contacts');
@@ -130,35 +151,102 @@ const ContactsScreen: React.FC<Props> = ({ navigation }) => {
     </TouchableOpacity>
   );
 
-  return (
-    <View style={styles.container}>
-      {loading ? (
-        <Text>Loading contacts...</Text>
-      ) : (
-        <FlatList
-          data={contacts}
-          keyExtractor={item => item.id}
-          renderItem={renderItem}
-          ListEmptyComponent={<Text>No contacts found.</Text>}
-        />
-      )}
+  const renderSectionHeader = ({ section }: { section: Section }) => (
+    <View style={styles.sectionHeader}>
+      <Text style={styles.sectionHeaderText}>{section.title}</Text>
     </View>
+  );
+
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => navigation.goBack()}>
+          <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>My Contacts</Text>
+        <TouchableOpacity onPress={() => {}}>
+          <Ionicons name="search" size={24} color={theme.colors.text} />
+        </TouchableOpacity>
+      </View>
+      <View style={styles.container}>
+        {loading ? (
+          <ActivityIndicator size="large" color={theme.colors.primary} />
+        ) : (
+          <SectionList
+            sections={sections}
+            keyExtractor={item => item.id}
+            renderItem={renderItem}
+            renderSectionHeader={renderSectionHeader}
+            ListEmptyComponent={
+              <Text style={styles.empty}>No contacts found.</Text>
+            }
+            stickySectionHeadersEnabled
+          />
+        )}
+      </View>
+    </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 16 },
+  safeArea: { flex: 1, backgroundColor: theme.colors.white },
+  container: {
+    flex: 1,
+    backgroundColor: theme.colors.background,
+    // paddingHorizontal: theme.spacing.m,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: theme.spacing.m,
+    justifyContent: 'space-between',
+    backgroundColor: theme.colors.white,
+  },
+  headerTitle: {
+    fontSize: theme.fontSizes.title,
+    fontWeight: 'bold',
+    color: theme.colors.text,
+  },
+  sectionHeader: {
+    backgroundColor: theme.colors.neutralLight,
+    paddingVertical: theme.spacing.xs,
+    paddingHorizontal: theme.spacing.s,
+  },
+  sectionHeaderText: {
+    fontWeight: '700',
+    fontSize: theme.fontSizes.small,
+    color: theme.colors.secondary,
+    paddingHorizontal: theme.spacing.m,
+  },
   item: {
-    padding: 12,
+    paddingVertical: theme.spacing.m,
     borderBottomWidth: 1,
-    borderColor: '#eee',
+    borderColor: theme.colors.border,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    paddingHorizontal: theme.spacing.m,
   },
-  name: { fontSize: 16, fontWeight: 'bold' },
-  phone: { fontSize: 14, color: '#555' },
-  invite: { color: 'blue', fontSize: 14, fontWeight: '600' },
+  name: {
+    fontSize: theme.fontSizes.body,
+    fontWeight: '600',
+    color: theme.colors.text,
+  },
+  phone: {
+    fontSize: theme.fontSizes.small,
+    color: theme.colors.subtext,
+  },
+  invite: {
+    color: theme.colors.primary,
+    fontSize: theme.fontSizes.small,
+    fontWeight: '600',
+  },
+  empty: {
+    textAlign: 'center',
+    marginTop: 40,
+    color: theme.colors.subtext,
+    fontSize: theme.fontSizes.body,
+  },
 });
 
 export default ContactsScreen;
