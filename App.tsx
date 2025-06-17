@@ -3,6 +3,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import axios from './src/utils/axiosInstance';
+import Toast from 'react-native-toast-message';
 
 import LoginScreen from './src/screens/auth/Login';
 import VerifyOTPScreen from './src/screens/auth/VerifyOTP';
@@ -116,6 +117,7 @@ const App: React.FC = () => {
           options={{ headerShown: false }}
         />
       </Stack.Navigator>
+      <Toast />
     </NavigationContainer>
   );
 };
