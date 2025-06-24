@@ -1,7 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { NavigationContainer } from '@react-navigation/native';
+import {
+  NavigationContainer,
+  useNavigationContainerRef,
+} from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { AppState, AppStateStatus } from 'react-native';
+import { getFirestore, doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { getApps, initializeApp } from 'firebase/app';
 import axios from './src/utils/axiosInstance';
 import Toast from 'react-native-toast-message';
 
@@ -11,13 +17,14 @@ import ChatList from './src/screens/Chat/ChatList';
 import ContactsScreen from './src/screens/Contact/Contacts';
 import ChatScreen from './src/screens/Chat/ChatScreen';
 import Splash from './src/screens/Splash/Splash';
+import ProfileSetupScreen from './src/screens/auth/ProfileSetup';
 
 import {
   createNotificationChannel,
   requestUserPermission,
   setupForegroundMessageHandler,
 } from './src/config/NotificationService';
-import ProfileSetupScreen from './src/screens/auth/ProfileSetup';
+import { firebaseConfig } from './src/config/firebase-config';
 
 export type RootStackParamList = {
   Login: undefined;
@@ -25,15 +32,19 @@ export type RootStackParamList = {
   ChatList: undefined;
   Contacts: undefined;
   Chat: { conversationId?: string };
+  ProfileSetup: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
+const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
+const db = getFirestore(app);
 
 const App: React.FC = () => {
   const [initialRoute, setInitialRoute] = useState<
     keyof RootStackParamList | null
   >(null);
   const [showSplash, setShowSplash] = useState<boolean>(true);
+  const [currentUser, setCurrentUser] = useState<any>(null);
 
   const saveFcmToken = async () => {
     const token = await requestUserPermission();
@@ -57,6 +68,24 @@ const App: React.FC = () => {
     }
   };
 
+  const updateUserStatus = async (isOnline: boolean) => {
+    if (!currentUser?._id) return;
+    try {
+      const statusRef = doc(db, 'status', currentUser._id);
+      await setDoc(
+        statusRef,
+        {
+          isOnline,
+          lastSeen: serverTimestamp(),
+        },
+        { merge: true },
+      );
+      console.log(`Status ${isOnline ? 'Online' : 'Offline'}`);
+    } catch (err) {
+      console.warn('Failed update status', err);
+    }
+  };
+
   useEffect(() => {
     const timer = setTimeout(async () => {
       try {
@@ -65,6 +94,7 @@ const App: React.FC = () => {
         const user = userStr ? JSON.parse(userStr) : null;
 
         if (token && user) {
+          setCurrentUser(user);
           if (!user.name || !user.about) {
             setInitialRoute('ProfileSetup');
           } else {
@@ -79,10 +109,27 @@ const App: React.FC = () => {
       } finally {
         setShowSplash(false);
       }
-    }, 3000);
+    }, 1500);
 
     return () => clearTimeout(timer);
   }, []);
+
+  useEffect(() => {
+    if (!currentUser?._id) return;
+
+    const onChange = (nextState: AppStateStatus) => {
+      updateUserStatus(nextState === 'active');
+    };
+
+    updateUserStatus(true);
+
+    const sub = AppState.addEventListener('change', onChange);
+
+    return () => {
+      updateUserStatus(false);
+      sub.remove();
+    };
+  }, [currentUser]);
 
   useEffect(() => {
     saveFcmToken();

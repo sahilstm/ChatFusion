@@ -9,6 +9,7 @@ import {
   Platform,
   TouchableOpacity,
   Animated,
+  AppState,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import moment from 'moment';
@@ -23,8 +24,7 @@ import {
   serverTimestamp,
   doc,
   updateDoc,
-  getDocs,
-  where,
+  setDoc,
 } from 'firebase/firestore';
 import { getApps, initializeApp } from 'firebase/app';
 import { firebaseConfig } from '../../config/firebase-config';
@@ -53,14 +53,90 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isOnline, setIsOnline] = useState(false);
+  const [lastSeen, setLastSeen] = useState<any>(null);
   const animRefs = useRef<Animated.Value[]>([]);
   const flatListRef = useRef<FlatList>(null);
 
+  console.log(lastSeen);
+  console.log('Current user', currentUser);
+  console.log('Receiver ID', receiver._id);
+
   useEffect(() => {
-    AsyncStorage.getItem('user').then(u => {
-      if (u) setCurrentUser(JSON.parse(u));
-    });
+    const loadUser = async () => {
+      const user = await AsyncStorage.getItem('user');
+      if (user) {
+        const parsed = JSON.parse(user);
+        setCurrentUser(parsed);
+      }
+    };
+    loadUser();
   }, []);
+
+  useEffect(() => {
+    const receiverStatusRef = doc(db, 'status', receiver._id);
+    const unsub = onSnapshot(receiverStatusRef, docSnap => {
+      const data = docSnap.data();
+      if (data?.isOnline) {
+        setIsOnline(true);
+      } else {
+        setIsOnline(false);
+        if (data?.lastSeen) setLastSeen(data.lastSeen);
+      }
+    });
+    return () => unsub();
+  }, [receiver._id]);
+
+  useEffect(() => {
+    if (!currentUser?._id) return;
+    const userStatusRef = doc(db, 'status', currentUser._id);
+
+    const setOnline = async () => {
+      try {
+        await setDoc(
+          doc(db, 'status', currentUser._id),
+          {
+            isOnline: true,
+            lastSeen: serverTimestamp(),
+          },
+          { merge: true },
+        );
+        console.log('status set');
+      } catch (err) {
+        console.error('Failed set online status', err);
+      }
+    };
+
+    const setOffline = async () => {
+      try {
+        await setDoc(
+          doc(db, 'status', currentUser._id),
+          {
+            isOnline: false,
+            lastSeen: serverTimestamp(),
+          },
+          { merge: true },
+        );
+        console.log('Offline status');
+      } catch (err) {
+        console.error('Failed set offline status', err);
+      }
+    };
+
+    setOnline();
+
+    const sub = AppState.addEventListener('change', state => {
+      if (state === 'active') {
+        setOnline();
+      } else {
+        setOffline();
+      }
+    });
+
+    return () => {
+      setOffline();
+      sub.remove();
+    };
+  }, [currentUser]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -181,7 +257,11 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
             <View>
               <Text style={styles.name}>{receiver.name}</Text>
               <Text style={styles.status}>
-                {isOnline ? 'Online' : 'Last seen recently'}
+                {isOnline
+                  ? 'Online'
+                  : lastSeen
+                  ? `Last seen at ${moment(lastSeen.toDate()).format('h:mm A')}`
+                  : 'Last seen recently'}
               </Text>
             </View>
           </View>
@@ -275,7 +355,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flex: 1,
   },
-
   avatarText: {
     color: theme.colors.white,
     fontWeight: 'bold',
