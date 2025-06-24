@@ -6,9 +6,9 @@ import {
   TouchableOpacity,
   PermissionsAndroid,
   Platform,
-  Alert,
   StyleSheet,
   ActivityIndicator,
+  Linking,
 } from 'react-native';
 import Contacts from 'react-native-contacts';
 import axios from '../../utils/axiosInstance';
@@ -16,6 +16,7 @@ import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import theme from '../../shared/constant/theme';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import Toast from 'react-native-toast-message';
 
 type Props = NativeStackScreenProps<any, 'Contacts'>;
 
@@ -65,10 +66,11 @@ const ContactsScreen: React.FC<Props> = ({ navigation }) => {
       }
 
       if (!permissionGranted) {
-        Alert.alert(
-          'Permission Denied',
-          'Please allow contacts access in settings to continue.',
-        );
+        Toast.show({
+          type: 'error',
+          text1: 'Permission Denied',
+          text2: 'Please allow contacts access in settings to continue.',
+        });
         setLoading(false);
         return;
       }
@@ -108,23 +110,38 @@ const ContactsScreen: React.FC<Props> = ({ navigation }) => {
         return contact;
       });
 
-      const sorted = merged.sort((a, b) => a.name.localeCompare(b.name));
-      const grouped: Record<string, Contact[]> = {};
+      const registered = merged
+        .filter(c => c.isRegistered)
+        .sort((a, b) => a.name.localeCompare(b.name));
 
-      sorted.forEach(contact => {
-        const firstLetter = contact.name.charAt(0).toUpperCase();
-        if (!grouped[firstLetter]) grouped[firstLetter] = [];
-        grouped[firstLetter].push(contact);
-      });
+      const unregistered = merged
+        .filter(c => !c.isRegistered)
+        .sort((a, b) => a.name.localeCompare(b.name));
 
-      const sectionListData: Section[] = Object.keys(grouped)
-        .sort()
-        .map(letter => ({ title: letter, data: grouped[letter] }));
+      const sectionListData: Section[] = [];
+
+      if (registered.length > 0) {
+        sectionListData.push({
+          title: 'Registered Contacts',
+          data: registered,
+        });
+      }
+
+      if (unregistered.length > 0) {
+        sectionListData.push({
+          title: 'Others (Unregistered)',
+          data: unregistered,
+        });
+      }
 
       setSections(sectionListData);
     } catch (err) {
       console.error('Contacts error', err);
-      Alert.alert('Error fetching contacts');
+      Toast.show({
+        type: 'error',
+        text1: 'Error fetching contacts',
+        text2: 'Something went wrong while accessing your contacts.',
+      });
     } finally {
       setLoading(false);
     }
@@ -134,22 +151,40 @@ const ContactsScreen: React.FC<Props> = ({ navigation }) => {
     fetchAndFilter();
   }, []);
 
-  const renderItem = ({ item }: { item: Contact }) => (
-    <TouchableOpacity
-      style={styles.item}
-      disabled={!item.isRegistered}
-      onPress={() =>
-        item.isRegistered && navigation.navigate('Chat', { user: item })
-      }
-    >
-      <View>
-        <Text style={styles.name}>{item.name || item.phone}</Text>
-        <Text style={styles.phone}>{item.phone}</Text>
-      </View>
+  const renderItem = ({ item }: { item: Contact }) => {
+    const handleInvite = (phone: string) => {
+      const message = `Hey! I'm using Chat App. Join me: https://levelupsolution.in/`;
+      const url = `sms:${phone}?body=${encodeURIComponent(message)}`;
 
-      {!item.isRegistered && <Text style={styles.invite}>Invite</Text>}
-    </TouchableOpacity>
-  );
+      Linking.openURL(url).catch(err => {
+        Toast.show({
+          type: 'error',
+          text1: 'Unable to open SMS app',
+          text2: 'Please check your default messaging app.',
+        });
+        console.error('SMS Error', err);
+      });
+    };
+
+    console.log(handleInvite);
+
+    return (
+      <TouchableOpacity
+        style={styles.item}
+        onPress={() =>
+          item.isRegistered
+            ? navigation.navigate('Chat', { user: item })
+            : handleInvite(item.phone)
+        }
+      >
+        <View>
+          <Text style={styles.name}>{item.name || item.phone}</Text>
+          <Text style={styles.phone}>{item.phone}</Text>
+        </View>
+        {!item.isRegistered && <Text style={styles.invite}>Invite</Text>}
+      </TouchableOpacity>
+    );
+  };
 
   const renderSectionHeader = ({ section }: { section: Section }) => (
     <View style={styles.sectionHeader}>
@@ -193,7 +228,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: theme.colors.background,
-    // paddingHorizontal: theme.spacing.m,
   },
   header: {
     flexDirection: 'row',
