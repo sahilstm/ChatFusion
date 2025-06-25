@@ -10,6 +10,7 @@ import { getFirestore, doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { getApps, initializeApp } from 'firebase/app';
 import axios from './src/utils/axiosInstance';
 import Toast from 'react-native-toast-message';
+import 'react-native-gesture-handler';
 
 import LoginScreen from './src/screens/auth/Login';
 import VerifyOTPScreen from './src/screens/auth/VerifyOTP';
@@ -25,6 +26,9 @@ import {
   setupForegroundMessageHandler,
 } from './src/config/NotificationService';
 import { firebaseConfig } from './src/config/firebase-config';
+import ImageEditorScreen from './src/screens/Image/ImageEditorScreen';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import CropImageScreen from './src/screens/Image/CropImageScreen';
 
 export type RootStackParamList = {
   Login: undefined;
@@ -142,41 +146,53 @@ const App: React.FC = () => {
   }
 
   return (
-    <NavigationContainer>
-      <Stack.Navigator initialRouteName={initialRoute}>
-        <Stack.Screen
-          name="Login"
-          component={LoginScreen}
-          options={{ headerShown: false }}
-        />
-        <Stack.Screen
-          name="VerifyOTP"
-          component={VerifyOTPScreen}
-          options={{ headerShown: false }}
-        />
-        <Stack.Screen
-          name="ProfileSetup"
-          component={ProfileSetupScreen}
-          options={{ headerShown: false }}
-        />
-        <Stack.Screen
-          name="ChatList"
-          component={ChatList}
-          options={{ headerShown: false }}
-        />
-        <Stack.Screen
-          name="Chat"
-          component={ChatScreen}
-          options={{ headerShown: false }}
-        />
-        <Stack.Screen
-          name="Contacts"
-          component={ContactsScreen}
-          options={{ headerShown: false }}
-        />
-      </Stack.Navigator>
-      <Toast />
-    </NavigationContainer>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <NavigationContainer>
+        <Stack.Navigator initialRouteName={initialRoute}>
+          <Stack.Screen
+            name="Login"
+            component={LoginScreen}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="VerifyOTP"
+            component={VerifyOTPScreen}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="ProfileSetup"
+            component={ProfileSetupScreen}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="ChatList"
+            component={ChatList}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="Chat"
+            component={ChatScreen}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="Contacts"
+            component={ContactsScreen}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="ImageEditor"
+            component={ImageEditorScreen}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="CropImage"
+            component={CropImageScreen}
+            options={{ headerShown: false }}
+          />
+        </Stack.Navigator>
+        <Toast />
+      </NavigationContainer>
+    </GestureHandlerRootView>
   );
 };
 

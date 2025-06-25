@@ -32,6 +32,7 @@ import axios from '../../utils/axiosInstance';
 import theme from '../../shared/constant/theme';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import CustomBottomSheet from '../../shared/components/CustomBottomSheet';
 
 type Props = NativeStackScreenProps<any, 'Chat'>;
 
@@ -56,6 +57,7 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
   const [isOnline, setIsOnline] = useState(false);
   const [lastSeen, setLastSeen] = useState<any>(null);
   const [isReceiverTyping, setIsReceiverTyping] = useState(false);
+  const [showSheet, setShowSheet] = useState(false);
   const [typingTimeout, setTypingTimeout] = useState<NodeJS.Timeout | null>(
     null,
   );
@@ -384,6 +386,14 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
         />
 
         <View style={styles.inputBar}>
+          <TouchableOpacity onPress={() => setShowSheet(true)}>
+            <Ionicons
+              name="apps"
+              size={theme.fontSizes.title}
+              color={theme.colors.primary}
+            />
+          </TouchableOpacity>
+
           <TextInput
             value={input}
             onChangeText={handleTyping}
@@ -396,6 +406,10 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+      <CustomBottomSheet
+        visible={showSheet}
+        onClose={() => setShowSheet(false)}
+      />
     </SafeAreaView>
   );
 };
@@ -485,6 +499,8 @@ const styles = StyleSheet.create({
   },
   inputBar: {
     flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.s,
     padding: theme.spacing.s,
     borderTopWidth: 1,
     borderColor: theme.colors.border,
