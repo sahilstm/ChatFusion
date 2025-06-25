@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   SectionList,
@@ -9,6 +9,8 @@ import {
   StyleSheet,
   ActivityIndicator,
   Linking,
+  TextInput,
+  Animated,
 } from 'react-native';
 import Contacts from 'react-native-contacts';
 import axios from '../../utils/axiosInstance';
@@ -36,6 +38,34 @@ interface Section {
 const ContactsScreen: React.FC<Props> = ({ navigation }) => {
   const [sections, setSections] = useState<Section[]>([]);
   const [loading, setLoading] = useState(false);
+  const [searchMode, setSearchMode] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const inputWidth = useRef(new Animated.Value(0)).current;
+
+  const openSearch = () => {
+    setSearchMode(true);
+    Animated.timing(inputWidth, {
+      toValue: 1,
+      duration: 300,
+      useNativeDriver: false,
+    }).start();
+  };
+
+  const closeSearch = () => {
+    Animated.timing(inputWidth, {
+      toValue: 0,
+      duration: 300,
+      useNativeDriver: false,
+    }).start(() => {
+      setSearchMode(false);
+      setSearchQuery('');
+    });
+  };
+
+  const animatedWidth = inputWidth.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0%', '100%'],
+  });
 
   const fetchAndFilter = async () => {
     try {
@@ -148,6 +178,27 @@ const ContactsScreen: React.FC<Props> = ({ navigation }) => {
   };
 
   useEffect(() => {
+    const timeout = setTimeout(() => {
+      if (!searchQuery) {
+        fetchAndFilter();
+        return;
+      }
+
+      const filtered = sections
+        .map(section => ({
+          ...section,
+          data: section.data.filter(c =>
+            c.name.toLowerCase().includes(searchQuery.toLowerCase()),
+          ),
+        }))
+        .filter(section => section.data.length > 0);
+
+      setSections(filtered);
+    }, 300);
+    return () => clearTimeout(timeout);
+  }, [searchQuery]);
+
+  useEffect(() => {
     fetchAndFilter();
   }, []);
 
@@ -195,14 +246,49 @@ const ContactsScreen: React.FC<Props> = ({ navigation }) => {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>My Contacts</Text>
-        <TouchableOpacity onPress={() => {}}>
-          <Ionicons name="search" size={24} color={theme.colors.text} />
-        </TouchableOpacity>
+        {searchMode ? (
+          <>
+            <TouchableOpacity onPress={closeSearch}>
+              <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
+            </TouchableOpacity>
+
+            <Animated.View
+              style={[styles.searchContainer, { width: animatedWidth }]}
+            >
+              <View style={styles.searchWrapper}>
+                <TextInput
+                  autoFocus
+                  placeholder="Search contacts"
+                  placeholderTextColor={theme.colors.subtext}
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                  style={styles.searchInput}
+                />
+                {searchQuery.length > 0 && (
+                  <TouchableOpacity onPress={() => setSearchQuery('')}>
+                    <Ionicons
+                      name="close"
+                      size={18}
+                      color={theme.colors.text}
+                    />
+                  </TouchableOpacity>
+                )}
+              </View>
+            </Animated.View>
+          </>
+        ) : (
+          <>
+            <TouchableOpacity onPress={() => navigation.goBack()}>
+              <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
+            </TouchableOpacity>
+            <Text style={styles.headerTitle}>My Contacts</Text>
+            <TouchableOpacity onPress={openSearch}>
+              <Ionicons name="search" size={24} color={theme.colors.text} />
+            </TouchableOpacity>
+          </>
+        )}
       </View>
+
       <View style={styles.container}>
         {loading ? (
           <ActivityIndicator size="large" color={theme.colors.primary} />
@@ -212,6 +298,8 @@ const ContactsScreen: React.FC<Props> = ({ navigation }) => {
             keyExtractor={item => item.id}
             renderItem={renderItem}
             renderSectionHeader={renderSectionHeader}
+            keyboardShouldPersistTaps="handled"
+            onScrollBeginDrag={() => Keyboard.dismiss()}
             ListEmptyComponent={
               <Text style={styles.empty}>No contacts found.</Text>
             }
@@ -235,7 +323,31 @@ const styles = StyleSheet.create({
     padding: theme.spacing.m,
     justifyContent: 'space-between',
     backgroundColor: theme.colors.white,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
   },
+  searchContainer: {
+    marginLeft: theme.spacing.s,
+    overflow: 'hidden',
+    justifyContent: 'center',
+  },
+
+  searchWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.neutralLight,
+    borderRadius: 8,
+    paddingHorizontal: theme.spacing.s,
+    width: '90%',
+  },
+
+  searchInput: {
+    flex: 1,
+    fontSize: theme.fontSizes.body,
+    color: theme.colors.text,
+    paddingVertical: Platform.OS === 'ios' ? theme.spacing.s : theme.spacing.s,
+  },
+
   headerTitle: {
     fontSize: theme.fontSizes.title,
     fontWeight: 'bold',
