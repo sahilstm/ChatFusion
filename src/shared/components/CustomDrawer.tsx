@@ -26,6 +26,7 @@ const CustomDrawer = ({ isOpen, onClose, navigation }: any) => {
     name: '',
     about: '',
     image: '',
+    phone:''
   });
 
   useEffect(() => {
@@ -38,6 +39,7 @@ const CustomDrawer = ({ isOpen, onClose, navigation }: any) => {
             name: parsed.name || 'Guest',
             about: parsed.about || 'Available',
             image: parsed.image || '',
+            phone: parsed.phone || '',
           });
         }
       } catch (e) {
@@ -107,6 +109,7 @@ const CustomDrawer = ({ isOpen, onClose, navigation }: any) => {
             <View>
               <Text style={styles.userName}>{user.name}</Text>
               <Text style={styles.userAbout}>{user.about}</Text>
+              <Text style={styles.userAbout}>+91 {user.phone}</Text>
             </View>
           </View>
 

@@ -9,6 +9,7 @@ import {
   Platform,
   TouchableOpacity,
   Animated,
+  AppState,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import moment from 'moment';
@@ -23,8 +24,7 @@ import {
   serverTimestamp,
   doc,
   updateDoc,
-  getDocs,
-  where,
+  setDoc,
 } from 'firebase/firestore';
 import { getApps, initializeApp } from 'firebase/app';
 import { firebaseConfig } from '../../config/firebase-config';
@@ -32,6 +32,7 @@ import axios from '../../utils/axiosInstance';
 import theme from '../../shared/constant/theme';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import CustomBottomSheet from '../../shared/components/CustomBottomSheet';
 
 type Props = NativeStackScreenProps<any, 'Chat'>;
 
@@ -42,6 +43,7 @@ interface Message {
   text: string;
   timestamp: any;
   seen?: boolean;
+  delivered?: boolean;
 }
 
 const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
@@ -53,14 +55,76 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isOnline, setIsOnline] = useState(false);
+  const [lastSeen, setLastSeen] = useState<any>(null);
+  const [isReceiverTyping, setIsReceiverTyping] = useState(false);
+  const [showSheet, setShowSheet] = useState(false);
+  const [typingTimeout, setTypingTimeout] = useState<NodeJS.Timeout | null>(
+    null,
+  );
   const animRefs = useRef<Animated.Value[]>([]);
   const flatListRef = useRef<FlatList>(null);
 
+  console.log(lastSeen);
+  console.log('Current user', currentUser);
+  console.log('Receiver ID', receiver._id);
+
   useEffect(() => {
-    AsyncStorage.getItem('user').then(u => {
-      if (u) setCurrentUser(JSON.parse(u));
-    });
+    const loadUser = async () => {
+      const user = await AsyncStorage.getItem('user');
+      if (user) {
+        setCurrentUser(JSON.parse(user));
+      }
+    };
+    loadUser();
   }, []);
+
+  useEffect(() => {
+    const receiverStatusRef = doc(db, 'status', receiver._id);
+    const unsub = onSnapshot(receiverStatusRef, docSnap => {
+      const data = docSnap.data();
+      setIsOnline(data?.isOnline || false);
+      if (data?.lastSeen) setLastSeen(data.lastSeen);
+    });
+    return () => unsub();
+  }, [receiver._id]);
+
+  useEffect(() => {
+    if (!currentUser?._id) return;
+    const userStatusRef = doc(db, 'status', currentUser._id);
+
+    const setOnline = async () => {
+      await setDoc(
+        userStatusRef,
+        {
+          isOnline: true,
+          lastSeen: serverTimestamp(),
+        },
+        { merge: true },
+      );
+    };
+
+    const setOffline = async () => {
+      await setDoc(
+        userStatusRef,
+        {
+          isOnline: false,
+          lastSeen: serverTimestamp(),
+        },
+        { merge: true },
+      );
+    };
+
+    setOnline();
+
+    const sub = AppState.addEventListener('change', state => {
+      state === 'active' ? setOnline() : setOffline();
+    });
+
+    return () => {
+      setOffline();
+      sub.remove();
+    };
+  }, [currentUser]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -92,6 +156,29 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
   }, [currentUser]);
 
   useEffect(() => {
+    if (!currentUser?._id || !receiver._id) return;
+
+    const typingDoc = doc(
+      db,
+      'typing',
+      `${receiver._id}_to_${currentUser._id}`,
+    );
+
+    const unsubscribe = onSnapshot(typingDoc, docSnap => {
+      const data = docSnap.data();
+      if (data?.userId === receiver._id && data?.isTyping) {
+        const lastTyped = data.timestamp?.toDate?.();
+        const isRecent = moment().diff(lastTyped, 'seconds') <= 5;
+        setIsReceiverTyping(isRecent);
+      } else {
+        setIsReceiverTyping(false);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [currentUser, receiver]);
+
+  useEffect(() => {
     messages.forEach((_, i) => {
       Animated.timing(animRefs.current[i], {
         toValue: 1,
@@ -115,7 +202,11 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
 
     try {
       const chatRef = collection(db, 'chats', chatId, 'messages');
-      await addDoc(chatRef, msg);
+      await addDoc(chatRef, msg).then(async docRef => {
+        await updateDoc(docRef, {
+          delivered: true,
+        });
+      });
 
       const fcmToken = await AsyncStorage.getItem(`fcm_${receiver._id}`);
       await axios.post('/chat/send', {
@@ -124,6 +215,13 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
         message: msg.text,
         fcmToken,
       });
+
+      const typingDoc = doc(
+        db,
+        'typing',
+        `${currentUser._id}_to_${receiver._id}`,
+      );
+      await setDoc(typingDoc, { isTyping: false }, { merge: true });
     } catch (err: any) {
       console.error('Failed to send message', err.message);
     }
@@ -131,9 +229,42 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
     setInput('');
   };
 
+  const handleTyping = async (text: string) => {
+    setInput(text);
+    if (!currentUser || !receiver) return;
+
+    const typingDoc = doc(
+      db,
+      'typing',
+      `${currentUser._id}_to_${receiver._id}`,
+    );
+
+    await setDoc(
+      typingDoc,
+      {
+        isTyping: !!text.trim(),
+        userId: currentUser._id,
+        timestamp: serverTimestamp(),
+      },
+      { merge: true },
+    );
+
+    if (typingTimeout) clearTimeout(typingTimeout);
+
+    const timeout = setTimeout(() => {
+      setDoc(
+        typingDoc,
+        { isTyping: false, userId: currentUser._id },
+        { merge: true },
+      );
+    }, 5000);
+
+    setTypingTimeout(timeout);
+  };
+
   const renderItem = ({ item, index }: { item: Message; index: number }) => {
     const isMe = item.senderId === currentUser?._id;
-    const isLast = isMe && index === messages.length - 1;
+    const isTypingBubble = item.id === 'typing';
 
     const translateY =
       animRefs.current[index]?.interpolate({
@@ -146,16 +277,38 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
         style={[
           styles.msgContainer,
           isMe ? styles.msgRight : styles.msgLeft,
+          isTypingBubble && { backgroundColor: theme.colors.border },
           { transform: [{ translateY }] },
           { opacity: animRefs.current[index] || 1 },
         ]}
       >
-        <Text style={styles.msgText}>{item.text}</Text>
-        <Text style={styles.msgTime}>
-          {item.timestamp?.toDate &&
-            moment(item.timestamp.toDate()).format('h:mm A')}
-          {isLast && item.seen && '  ✓ Seen'}
+        <Text
+          style={[
+            styles.msgText,
+            isMe ? styles.msgTextRight : styles.msgTextLeft,
+          ]}
+        >
+          {item.text}
         </Text>
+
+        {!isTypingBubble && item.timestamp?.toDate && (
+          <Text style={styles.msgTime}>
+            {moment(item.timestamp?.toDate?.()).format('h:mm A')}
+            {isMe && (
+              <Ionicons
+                name={
+                  item.seen
+                    ? 'checkmark-done'
+                    : item.delivered
+                    ? 'checkmark-done-outline'
+                    : 'checkmark-outline'
+                }
+                size={16}
+                color={item.seen ? theme.colors.white : theme.colors.subtext}
+              />
+            )}
+          </Text>
+        )}
       </Animated.View>
     );
   };
@@ -181,7 +334,13 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
             <View>
               <Text style={styles.name}>{receiver.name}</Text>
               <Text style={styles.status}>
-                {isOnline ? 'Online' : 'Last seen recently'}
+                {isReceiverTyping
+                  ? 'typing...'
+                  : isOnline
+                  ? 'Online'
+                  : lastSeen
+                  ? `Last seen at ${moment(lastSeen.toDate()).format('h:mm A')}`
+                  : 'Last seen recently'}
               </Text>
             </View>
           </View>
@@ -209,7 +368,14 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
 
         <FlatList
           ref={flatListRef}
-          data={messages}
+          data={
+            isReceiverTyping
+              ? [
+                  ...messages,
+                  { id: 'typing', text: 'typing...', senderId: receiver._id },
+                ]
+              : messages
+          }
           keyExtractor={(item, i) => item.id || i.toString()}
           renderItem={renderItem}
           contentContainerStyle={styles.msgList}
@@ -220,9 +386,17 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
         />
 
         <View style={styles.inputBar}>
+          <TouchableOpacity onPress={() => setShowSheet(true)}>
+            <Ionicons
+              name="apps"
+              size={theme.fontSizes.title}
+              color={theme.colors.primary}
+            />
+          </TouchableOpacity>
+
           <TextInput
             value={input}
-            onChangeText={setInput}
+            onChangeText={handleTyping}
             placeholder="Type a message"
             placeholderTextColor={theme.colors.subtext}
             style={styles.input}
@@ -232,19 +406,19 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+      <CustomBottomSheet
+        visible={showSheet}
+        onClose={() => setShowSheet(false)}
+      />
     </SafeAreaView>
   );
 };
 
+export default ChatScreen;
+
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: theme.colors.card,
-  },
-  container: {
-    flex: 1,
-    backgroundColor: theme.colors.background,
-  },
+  safeArea: { flex: 1, backgroundColor: theme.colors.card },
+  container: { flex: 1, backgroundColor: theme.colors.background },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -262,9 +436,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginRight: theme.spacing.m,
   },
-  iconLeft: {
-    marginRight: 12,
-  },
+  iconLeft: { marginRight: 12 },
   iconRightContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -275,7 +447,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flex: 1,
   },
-
   avatarText: {
     color: theme.colors.white,
     fontWeight: 'bold',
@@ -305,20 +476,31 @@ const styles = StyleSheet.create({
   },
   msgRight: {
     alignSelf: 'flex-end',
-    backgroundColor: theme.colors.success,
+    backgroundColor: theme.colors.primary,
   },
   msgText: {
     fontSize: theme.fontSizes.body,
-    color: theme.colors.text,
   },
+  msgTextLeft: {
+    color: theme.colors.primary,
+  },
+  msgTextRight: {
+    color: theme.colors.white,
+  },
+
   msgTime: {
     fontSize: theme.fontSizes.caption,
     color: theme.colors.subtext,
     marginTop: 4,
     textAlign: 'right',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
   },
   inputBar: {
     flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.s,
     padding: theme.spacing.s,
     borderTopWidth: 1,
     borderColor: theme.colors.border,
@@ -347,5 +529,3 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
-
-export default ChatScreen;

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   SectionList,
@@ -6,9 +6,11 @@ import {
   TouchableOpacity,
   PermissionsAndroid,
   Platform,
-  Alert,
   StyleSheet,
   ActivityIndicator,
+  Linking,
+  TextInput,
+  Animated,
 } from 'react-native';
 import Contacts from 'react-native-contacts';
 import axios from '../../utils/axiosInstance';
@@ -16,6 +18,7 @@ import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import theme from '../../shared/constant/theme';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import Toast from 'react-native-toast-message';
 
 type Props = NativeStackScreenProps<any, 'Contacts'>;
 
@@ -35,6 +38,34 @@ interface Section {
 const ContactsScreen: React.FC<Props> = ({ navigation }) => {
   const [sections, setSections] = useState<Section[]>([]);
   const [loading, setLoading] = useState(false);
+  const [searchMode, setSearchMode] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const inputWidth = useRef(new Animated.Value(0)).current;
+
+  const openSearch = () => {
+    setSearchMode(true);
+    Animated.timing(inputWidth, {
+      toValue: 1,
+      duration: 300,
+      useNativeDriver: false,
+    }).start();
+  };
+
+  const closeSearch = () => {
+    Animated.timing(inputWidth, {
+      toValue: 0,
+      duration: 300,
+      useNativeDriver: false,
+    }).start(() => {
+      setSearchMode(false);
+      setSearchQuery('');
+    });
+  };
+
+  const animatedWidth = inputWidth.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0%', '100%'],
+  });
 
   const fetchAndFilter = async () => {
     try {
@@ -65,10 +96,11 @@ const ContactsScreen: React.FC<Props> = ({ navigation }) => {
       }
 
       if (!permissionGranted) {
-        Alert.alert(
-          'Permission Denied',
-          'Please allow contacts access in settings to continue.',
-        );
+        Toast.show({
+          type: 'error',
+          text1: 'Permission Denied',
+          text2: 'Please allow contacts access in settings to continue.',
+        });
         setLoading(false);
         return;
       }
@@ -108,48 +140,102 @@ const ContactsScreen: React.FC<Props> = ({ navigation }) => {
         return contact;
       });
 
-      const sorted = merged.sort((a, b) => a.name.localeCompare(b.name));
-      const grouped: Record<string, Contact[]> = {};
+      const registered = merged
+        .filter(c => c.isRegistered)
+        .sort((a, b) => a.name.localeCompare(b.name));
 
-      sorted.forEach(contact => {
-        const firstLetter = contact.name.charAt(0).toUpperCase();
-        if (!grouped[firstLetter]) grouped[firstLetter] = [];
-        grouped[firstLetter].push(contact);
-      });
+      const unregistered = merged
+        .filter(c => !c.isRegistered)
+        .sort((a, b) => a.name.localeCompare(b.name));
 
-      const sectionListData: Section[] = Object.keys(grouped)
-        .sort()
-        .map(letter => ({ title: letter, data: grouped[letter] }));
+      const sectionListData: Section[] = [];
+
+      if (registered.length > 0) {
+        sectionListData.push({
+          title: 'Registered Contacts',
+          data: registered,
+        });
+      }
+
+      if (unregistered.length > 0) {
+        sectionListData.push({
+          title: 'Others (Unregistered)',
+          data: unregistered,
+        });
+      }
 
       setSections(sectionListData);
     } catch (err) {
       console.error('Contacts error', err);
-      Alert.alert('Error fetching contacts');
+      Toast.show({
+        type: 'error',
+        text1: 'Error fetching contacts',
+        text2: 'Something went wrong while accessing your contacts.',
+      });
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
+    const timeout = setTimeout(() => {
+      if (!searchQuery) {
+        fetchAndFilter();
+        return;
+      }
+
+      const filtered = sections
+        .map(section => ({
+          ...section,
+          data: section.data.filter(c =>
+            c.name.toLowerCase().includes(searchQuery.toLowerCase()),
+          ),
+        }))
+        .filter(section => section.data.length > 0);
+
+      setSections(filtered);
+    }, 300);
+    return () => clearTimeout(timeout);
+  }, [searchQuery]);
+
+  useEffect(() => {
     fetchAndFilter();
   }, []);
 
-  const renderItem = ({ item }: { item: Contact }) => (
-    <TouchableOpacity
-      style={styles.item}
-      disabled={!item.isRegistered}
-      onPress={() =>
-        item.isRegistered && navigation.navigate('Chat', { user: item })
-      }
-    >
-      <View>
-        <Text style={styles.name}>{item.name || item.phone}</Text>
-        <Text style={styles.phone}>{item.phone}</Text>
-      </View>
+  const renderItem = ({ item }: { item: Contact }) => {
+    const handleInvite = (phone: string) => {
+      const message = `Hey! I'm using Chat App. Join me: https://levelupsolution.in/`;
+      const url = `sms:${phone}?body=${encodeURIComponent(message)}`;
 
-      {!item.isRegistered && <Text style={styles.invite}>Invite</Text>}
-    </TouchableOpacity>
-  );
+      Linking.openURL(url).catch(err => {
+        Toast.show({
+          type: 'error',
+          text1: 'Unable to open SMS app',
+          text2: 'Please check your default messaging app.',
+        });
+        console.error('SMS Error', err);
+      });
+    };
+
+    console.log(handleInvite);
+
+    return (
+      <TouchableOpacity
+        style={styles.item}
+        onPress={() =>
+          item.isRegistered
+            ? navigation.navigate('Chat', { user: item })
+            : handleInvite(item.phone)
+        }
+      >
+        <View>
+          <Text style={styles.name}>{item.name || item.phone}</Text>
+          <Text style={styles.phone}>{item.phone}</Text>
+        </View>
+        {!item.isRegistered && <Text style={styles.invite}>Invite</Text>}
+      </TouchableOpacity>
+    );
+  };
 
   const renderSectionHeader = ({ section }: { section: Section }) => (
     <View style={styles.sectionHeader}>
@@ -160,14 +246,49 @@ const ContactsScreen: React.FC<Props> = ({ navigation }) => {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>My Contacts</Text>
-        <TouchableOpacity onPress={() => {}}>
-          <Ionicons name="search" size={24} color={theme.colors.text} />
-        </TouchableOpacity>
+        {searchMode ? (
+          <>
+            <TouchableOpacity onPress={closeSearch}>
+              <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
+            </TouchableOpacity>
+
+            <Animated.View
+              style={[styles.searchContainer, { width: animatedWidth }]}
+            >
+              <View style={styles.searchWrapper}>
+                <TextInput
+                  autoFocus
+                  placeholder="Search contacts"
+                  placeholderTextColor={theme.colors.subtext}
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                  style={styles.searchInput}
+                />
+                {searchQuery.length > 0 && (
+                  <TouchableOpacity onPress={() => setSearchQuery('')}>
+                    <Ionicons
+                      name="close"
+                      size={18}
+                      color={theme.colors.text}
+                    />
+                  </TouchableOpacity>
+                )}
+              </View>
+            </Animated.View>
+          </>
+        ) : (
+          <>
+            <TouchableOpacity onPress={() => navigation.goBack()}>
+              <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
+            </TouchableOpacity>
+            <Text style={styles.headerTitle}>My Contacts</Text>
+            <TouchableOpacity onPress={openSearch}>
+              <Ionicons name="search" size={24} color={theme.colors.text} />
+            </TouchableOpacity>
+          </>
+        )}
       </View>
+
       <View style={styles.container}>
         {loading ? (
           <ActivityIndicator size="large" color={theme.colors.primary} />
@@ -177,6 +298,8 @@ const ContactsScreen: React.FC<Props> = ({ navigation }) => {
             keyExtractor={item => item.id}
             renderItem={renderItem}
             renderSectionHeader={renderSectionHeader}
+            keyboardShouldPersistTaps="handled"
+            onScrollBeginDrag={() => Keyboard.dismiss()}
             ListEmptyComponent={
               <Text style={styles.empty}>No contacts found.</Text>
             }
@@ -193,7 +316,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: theme.colors.background,
-    // paddingHorizontal: theme.spacing.m,
   },
   header: {
     flexDirection: 'row',
@@ -201,7 +323,31 @@ const styles = StyleSheet.create({
     padding: theme.spacing.m,
     justifyContent: 'space-between',
     backgroundColor: theme.colors.white,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
   },
+  searchContainer: {
+    marginLeft: theme.spacing.s,
+    overflow: 'hidden',
+    justifyContent: 'center',
+  },
+
+  searchWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.neutralLight,
+    borderRadius: 8,
+    paddingHorizontal: theme.spacing.s,
+    width: '90%',
+  },
+
+  searchInput: {
+    flex: 1,
+    fontSize: theme.fontSizes.body,
+    color: theme.colors.text,
+    paddingVertical: Platform.OS === 'ios' ? theme.spacing.s : theme.spacing.s,
+  },
+
   headerTitle: {
     fontSize: theme.fontSizes.title,
     fontWeight: 'bold',

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -21,48 +21,30 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import CustomDrawer from '../../shared/components/CustomDrawer';
 import Contacts from 'react-native-contacts';
 
+import {
+  getFirestore,
+  collection,
+  doc,
+  query,
+  where,
+  onSnapshot,
+} from '@react-native-firebase/firestore';
+import { useFocusEffect } from '@react-navigation/native';
+
 const ChatList = ({ navigation }: any) => {
   const [chats, setChats] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const fadeAnim = useState(new Animated.Value(0))[0];
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [filter, setFilter] = useState('All');
-  const [counts, setCounts] = useState({
-    unread: 0,
-    favorites: 0,
-    groups: 0,
-  });
+  const [counts, setCounts] = useState({ unread: 0, favorites: 0, groups: 0 });
   const [contactMap, setContactMap] = useState<{ [phone: string]: string }>({});
 
-  const fetchChats = async () => {
-    const user = await AsyncStorage.getItem('user');
-    if (!user) return;
-    const { _id } = JSON.parse(user);
+  const db = getFirestore();
+  const unsubscribers: (() => void)[] = [];
 
-    try {
-      const { data } = await axios.get(`/chat/list/${_id}`);
-      setChats(data.chatList);
-
-      const unread = data.chatList.filter(
-        (chat: { read: any }) => !chat.read,
-      ).length;
-      const favorites = data.chatList.filter(
-        (chat: { favorite: any }) => chat.favorite,
-      ).length;
-      const groups = data.chatList.filter(
-        (chat: { isGroup: any }) => chat.isGroup,
-      ).length;
-
-      setCounts({ unread, favorites, groups });
-    } catch (err) {
-      console.error('Error fetching chat list', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-  const normalizePhoneNumber = (number: string) => {
-    return number.replace(/[^\d]/g, '').slice(-10);
-  };
+  const normalizePhoneNumber = (number: string) =>
+    number.replace(/[^\d]/g, '').slice(-10);
 
   const loadContacts = async () => {
     try {
@@ -91,17 +73,91 @@ const ChatList = ({ navigation }: any) => {
     }
   };
 
-  useEffect(() => {
-    loadContacts();
-    fetchChats();
+  const setupListeners = async () => {
+    const user = await AsyncStorage.getItem('user');
+    if (!user) return;
+    const { _id: currentUserId } = JSON.parse(user);
 
-    Animated.timing(fadeAnim, {
-      toValue: 1,
-      duration: 500,
-      easing: Easing.out(Easing.ease),
-      useNativeDriver: true,
-    }).start();
-  }, []);
+    try {
+      const { data } = await axios.get(`/chat/list/${currentUserId}`);
+      const sortedChats = data.chatList
+        .sort(
+          (a, b) =>
+            (b.timestamp?.toDate?.() ?? new Date(0)).getTime() -
+            (a.timestamp?.toDate?.() ?? new Date(0)).getTime(),
+        )
+        .map(chat => ({
+          ...chat,
+          unreadCount: 0,
+        }));
+
+      setChats(sortedChats);
+
+      data.chatList.forEach(chat => {
+        const chatRef = doc(collection(db, 'chats'), chat._id);
+        const messagesRef = collection(chatRef, 'messages');
+
+        const q = query(
+          messagesRef,
+          where('receiverId', '==', currentUserId),
+          where('seen', '==', false),
+        );
+
+        const unsubscribe = onSnapshot(q, snapshot => {
+          const unreadCount = snapshot.size;
+
+          setChats(prevChats =>
+            [
+              ...prevChats.map(c =>
+                c._id === chat._id ? { ...c, unreadCount } : c,
+              ),
+            ].sort(
+              (a, b) =>
+                (b.timestamp?.toDate?.() ?? new Date(0)).getTime() -
+                (a.timestamp?.toDate?.() ?? new Date(0)).getTime(),
+            ),
+          );
+
+          setCounts(prev => {
+            const newChats = [
+              ...chats.map(c =>
+                c._id === chat._id ? { ...c, unreadCount } : c,
+              ),
+            ];
+            return {
+              unread: newChats.filter(c => c.unreadCount > 0).length,
+              favorites: newChats.filter(c => c.favorite).length,
+              groups: newChats.filter(c => c.isGroup).length,
+            };
+          });
+        });
+
+        unsubscribers.push(unsubscribe);
+      });
+    } catch (err) {
+      console.error('Error setting up chat listeners', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useFocusEffect(
+    useCallback(() => {
+      loadContacts();
+      setupListeners();
+
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 500,
+        easing: Easing.out(Easing.ease),
+        useNativeDriver: true,
+      }).start();
+
+      return () => {
+        unsubscribers.forEach(unsub => unsub());
+      };
+    }, []),
+  );
 
   const filters = [
     { label: 'All', key: 'All' },
@@ -113,7 +169,7 @@ const ChatList = ({ navigation }: any) => {
 
   const filteredChats = chats.filter(chat => {
     if (filter === 'All') return true;
-    if (filter === 'Unread') return !chat.read;
+    if (filter === 'Unread') return chat.unreadCount > 0;
     if (filter === 'Favorites') return chat.favorite;
     if (filter === 'Groups') return chat.isGroup;
     return true;
@@ -149,11 +205,22 @@ const ChatList = ({ navigation }: any) => {
 
         <View style={styles.rightContainer}>
           <Text style={styles.time}>
-            {item.timestamp ? moment(item.timestamp).fromNow() : ''}
+            {(() => {
+              try {
+                const date =
+                  typeof item.timestamp?.toDate === 'function'
+                    ? item.timestamp.toDate()
+                    : new Date(item.timestamp);
+                return moment(date).fromNow();
+              } catch (e) {
+                return 'Just now';
+              }
+            })()}
           </Text>
-          {!item.read && (
+
+          {item.unreadCount > 0 && (
             <View style={styles.unreadBadge}>
-              <Text style={styles.unreadText}>1</Text>
+              <Text style={styles.unreadText}>{item.unreadCount}</Text>
             </View>
           )}
         </View>
