@@ -14,7 +14,7 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import HapticFeedback from 'react-native-haptic-feedback';
 import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
 import theme from '../constant/theme';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 
@@ -25,6 +25,7 @@ interface Props {
 
 const CustomBottomSheet: React.FC<Props> = ({ visible, onClose }) => {
   const navigation = useNavigation();
+  const route = useRoute();
 
   const translateY = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
 
@@ -34,7 +35,11 @@ const CustomBottomSheet: React.FC<Props> = ({ visible, onClose }) => {
       const uri = response.assets?.[0]?.uri;
       if (uri) {
         onClose();
-        navigation.navigate('ImageEditor', { uri });
+        navigation.navigate('ImageEditor', {
+          uri,
+          user: route.params?.user, // if this is accessible
+        });
+        
       }
     });
   };

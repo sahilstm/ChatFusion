@@ -11,26 +11,48 @@ import {
   PanResponder,
   Keyboard,
   TouchableWithoutFeedback,
+  Alert,
 } from 'react-native';
 import { PinchGestureHandler } from 'react-native-gesture-handler';
 import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import theme from '../../shared/constant/theme';
+import { getApps, initializeApp } from 'firebase/app';
+import { firebaseConfig } from '../../config/firebase-config';
+import {
+  getFirestore,
+  collection,
+  addDoc,
+  serverTimestamp,
+} from 'firebase/firestore';
+import {
+  getStorage,
+  ref,
+  uploadBytes,
+  getDownloadURL,
+} from 'firebase/storage';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import axios from '../../utils/axiosInstance';
 
-type RootStackParamList = {
-  ImageEditor: { uri: string; croppedUri?: string };
+type ImageEditorRouteParams = {
+  uri: string;
+  croppedUri?: string;
+  user: any; // receiver
 };
 
+const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const storage = getStorage(app);
+
 const ImageEditorScreen = () => {
-  const route = useRoute<RouteProp<RootStackParamList, 'ImageEditor'>>();
+  const route = useRoute<RouteProp<Record<string, ImageEditorRouteParams>, string>>();
   const navigation = useNavigation();
-  const { uri, croppedUri } = route.params;
+  const { uri, croppedUri, user: receiver } = route.params;
 
   const [imageUri, setImageUri] = useState(uri);
   const [caption, setCaption] = useState('');
-  const [loading] = useState(false);
-
+  const [loading, setLoading] = useState(false);
   const pan = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
   const scale = useRef(new Animated.Value(1)).current;
 
@@ -49,10 +71,9 @@ const ImageEditorScreen = () => {
         });
         pan.setValue({ x: 0, y: 0 });
       },
-      onPanResponderMove: Animated.event(
-        [null, { dx: pan.x, dy: pan.y }],
-        { useNativeDriver: false }
-      ),
+      onPanResponderMove: Animated.event([null, { dx: pan.x, dy: pan.y }], {
+        useNativeDriver: false,
+      }),
       onPanResponderRelease: () => {
         pan.flattenOffset();
       },
@@ -64,10 +85,49 @@ const ImageEditorScreen = () => {
     { useNativeDriver: false }
   );
 
-  const handleSend = () => {
-    console.log('Final Image:', imageUri);
-    console.log('Caption:', caption);
-    navigation.goBack();
+  const handleSend = async () => {
+    try {
+      setLoading(true);
+      const currentUserStr = await AsyncStorage.getItem('user');
+      if (!currentUserStr) throw new Error('User not found');
+      const currentUser = JSON.parse(currentUserStr);
+
+      const chatId = [currentUser._id, receiver._id].sort().join('_');
+
+      const response = await fetch(imageUri);
+      const blob = await response.blob();
+      const filename = `${Date.now()}.jpg`;
+      const imageRef = ref(storage, `chats/${chatId}/${filename}`);
+      await uploadBytes(imageRef, blob);
+      const downloadURL = await getDownloadURL(imageRef);
+
+      const message = {
+        senderId: currentUser._id,
+        receiverId: receiver._id,
+        imageUrl: downloadURL,
+        caption: caption.trim(),
+        timestamp: serverTimestamp(),
+        seen: false,
+      };
+
+      const chatRef = collection(db, 'chats', chatId, 'messages');
+      const docRef = await addDoc(chatRef, message);
+
+      await axios.post('/chat/send', {
+        senderId: currentUser._id,
+        receiverId: receiver._id,
+        imageUrl: downloadURL,
+        caption: caption.trim(),
+        fcmToken: await AsyncStorage.getItem(`fcm_${receiver._id}`),
+      });
+
+      setLoading(false);
+      navigation.goBack();
+    } catch (err) {
+      console.error('Error sending image message', err);
+      Alert.alert('Error', 'Failed to send image.');
+      setLoading(false);
+    }
   };
 
   return (
@@ -126,22 +186,24 @@ const ImageEditorScreen = () => {
             value={caption}
             onChangeText={setCaption}
             returnKeyType="done"
+            editable={!loading}
           />
-          <TouchableOpacity style={styles.sendBtn} onPress={handleSend}>
-            <Icon
-              name="check"
-              size={theme.fontSizes.title}
-              color={theme.colors.primary}
-            />
+          <TouchableOpacity style={styles.sendBtn} onPress={handleSend} disabled={loading}>
+            {loading ? (
+              <ActivityIndicator size={20} color={theme.colors.primary} />
+            ) : (
+              <Icon
+                name="check"
+                size={theme.fontSizes.title}
+                color={theme.colors.primary}
+              />
+            )}
           </TouchableOpacity>
         </View>
       </SafeAreaView>
     </TouchableWithoutFeedback>
   );
 };
-
-export default ImageEditorScreen;
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -194,3 +256,5 @@ const styles = StyleSheet.create({
     borderRadius: 100,
   },
 });
+
+export default ImageEditorScreen;

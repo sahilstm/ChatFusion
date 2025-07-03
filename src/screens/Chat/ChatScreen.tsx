@@ -10,6 +10,7 @@ import {
   TouchableOpacity,
   Animated,
   AppState,
+  Image,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import moment from 'moment';
@@ -40,7 +41,9 @@ interface Message {
   id?: string;
   senderId: string;
   receiverId: string;
-  text: string;
+  text?: string;
+  imageUrl?: string;
+  caption?: string;
   timestamp: any;
   seen?: boolean;
   delivered?: boolean;
@@ -58,22 +61,14 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
   const [lastSeen, setLastSeen] = useState<any>(null);
   const [isReceiverTyping, setIsReceiverTyping] = useState(false);
   const [showSheet, setShowSheet] = useState(false);
-  const [typingTimeout, setTypingTimeout] = useState<NodeJS.Timeout | null>(
-    null,
-  );
+  const [typingTimeout, setTypingTimeout] = useState<NodeJS.Timeout | null>(null);
   const animRefs = useRef<Animated.Value[]>([]);
   const flatListRef = useRef<FlatList>(null);
-
-  console.log(lastSeen);
-  console.log('Current user', currentUser);
-  console.log('Receiver ID', receiver._id);
 
   useEffect(() => {
     const loadUser = async () => {
       const user = await AsyncStorage.getItem('user');
-      if (user) {
-        setCurrentUser(JSON.parse(user));
-      }
+      if (user) setCurrentUser(JSON.parse(user));
     };
     loadUser();
   }, []);
@@ -93,29 +88,20 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
     const userStatusRef = doc(db, 'status', currentUser._id);
 
     const setOnline = async () => {
-      await setDoc(
-        userStatusRef,
-        {
-          isOnline: true,
-          lastSeen: serverTimestamp(),
-        },
-        { merge: true },
-      );
+      await setDoc(userStatusRef, {
+        isOnline: true,
+        lastSeen: serverTimestamp(),
+      }, { merge: true });
     };
 
     const setOffline = async () => {
-      await setDoc(
-        userStatusRef,
-        {
-          isOnline: false,
-          lastSeen: serverTimestamp(),
-        },
-        { merge: true },
-      );
+      await setDoc(userStatusRef, {
+        isOnline: false,
+        lastSeen: serverTimestamp(),
+      }, { merge: true });
     };
 
     setOnline();
-
     const sub = AppState.addEventListener('change', state => {
       state === 'active' ? setOnline() : setOffline();
     });
@@ -127,7 +113,7 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
   }, [currentUser]);
 
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser || !receiver) return;
 
     const chatId = [currentUser._id, receiver._id].sort().join('_');
     const chatRef = collection(db, 'chats', chatId, 'messages');
@@ -158,12 +144,7 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
   useEffect(() => {
     if (!currentUser?._id || !receiver._id) return;
 
-    const typingDoc = doc(
-      db,
-      'typing',
-      `${receiver._id}_to_${currentUser._id}`,
-    );
-
+    const typingDoc = doc(db, 'typing', `${receiver._id}_to_${currentUser._id}`);
     const unsubscribe = onSnapshot(typingDoc, docSnap => {
       const data = docSnap.data();
       if (data?.userId === receiver._id && data?.isTyping) {
@@ -203,9 +184,7 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
     try {
       const chatRef = collection(db, 'chats', chatId, 'messages');
       await addDoc(chatRef, msg).then(async docRef => {
-        await updateDoc(docRef, {
-          delivered: true,
-        });
+        await updateDoc(docRef, { delivered: true });
       });
 
       const fcmToken = await AsyncStorage.getItem(`fcm_${receiver._id}`);
@@ -216,14 +195,10 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
         fcmToken,
       });
 
-      const typingDoc = doc(
-        db,
-        'typing',
-        `${currentUser._id}_to_${receiver._id}`,
-      );
+      const typingDoc = doc(db, 'typing', `${currentUser._id}_to_${receiver._id}`);
       await setDoc(typingDoc, { isTyping: false }, { merge: true });
-    } catch (err: any) {
-      console.error('Failed to send message', err.message);
+    } catch (err) {
+      console.error('Failed to send message', err);
     }
 
     setInput('');
@@ -233,30 +208,21 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
     setInput(text);
     if (!currentUser || !receiver) return;
 
-    const typingDoc = doc(
-      db,
-      'typing',
-      `${currentUser._id}_to_${receiver._id}`,
-    );
+    const typingDoc = doc(db, 'typing', `${currentUser._id}_to_${receiver._id}`);
 
-    await setDoc(
-      typingDoc,
-      {
-        isTyping: !!text.trim(),
-        userId: currentUser._id,
-        timestamp: serverTimestamp(),
-      },
-      { merge: true },
-    );
+    await setDoc(typingDoc, {
+      isTyping: !!text.trim(),
+      userId: currentUser._id,
+      timestamp: serverTimestamp(),
+    }, { merge: true });
 
     if (typingTimeout) clearTimeout(typingTimeout);
 
     const timeout = setTimeout(() => {
-      setDoc(
-        typingDoc,
-        { isTyping: false, userId: currentUser._id },
-        { merge: true },
-      );
+      setDoc(typingDoc, {
+        isTyping: false,
+        userId: currentUser._id,
+      }, { merge: true });
     }, 5000);
 
     setTypingTimeout(timeout);
@@ -264,8 +230,6 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
 
   const renderItem = ({ item, index }: { item: Message; index: number }) => {
     const isMe = item.senderId === currentUser?._id;
-    const isTypingBubble = item.id === 'typing';
-
     const translateY =
       animRefs.current[index]?.interpolate({
         inputRange: [0, 1],
@@ -277,23 +241,31 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
         style={[
           styles.msgContainer,
           isMe ? styles.msgRight : styles.msgLeft,
-          isTypingBubble && { backgroundColor: theme.colors.border },
           { transform: [{ translateY }] },
           { opacity: animRefs.current[index] || 1 },
         ]}
       >
-        <Text
-          style={[
-            styles.msgText,
-            isMe ? styles.msgTextRight : styles.msgTextLeft,
-          ]}
-        >
-          {item.text}
-        </Text>
+        {item.imageUrl && (
+          <Image
+            source={{ uri: item.imageUrl }}
+            style={styles.image}
+            resizeMode="cover"
+          />
+        )}
+        {item.caption && (
+          <Text style={[styles.msgText, isMe ? styles.msgTextRight : styles.msgTextLeft]}>
+            {item.caption}
+          </Text>
+        )}
+        {item.text && (
+          <Text style={[styles.msgText, isMe ? styles.msgTextRight : styles.msgTextLeft]}>
+            {item.text}
+          </Text>
+        )}
 
-        {!isTypingBubble && item.timestamp?.toDate && (
+        {item.timestamp?.toDate && (
           <Text style={styles.msgTime}>
-            {moment(item.timestamp?.toDate?.()).format('h:mm A')}
+            {moment(item.timestamp.toDate()).format('h:mm A')}
             {isMe && (
               <Ionicons
                 name={
@@ -347,35 +319,20 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
 
           <View style={styles.iconRightContainer}>
             <TouchableOpacity onPress={() => console.log('Audio call')}>
-              <Ionicons
-                name="call-outline"
-                size={22}
-                color={theme.colors.text}
-              />
+              <Ionicons name="call-outline" size={22} color={theme.colors.text} />
             </TouchableOpacity>
             <TouchableOpacity
               onPress={() => console.log('Video call')}
               style={{ marginLeft: 16 }}
             >
-              <Ionicons
-                name="videocam-outline"
-                size={22}
-                color={theme.colors.text}
-              />
+              <Ionicons name="videocam-outline" size={22} color={theme.colors.text} />
             </TouchableOpacity>
           </View>
         </View>
 
         <FlatList
           ref={flatListRef}
-          data={
-            isReceiverTyping
-              ? [
-                  ...messages,
-                  { id: 'typing', text: 'typing...', senderId: receiver._id },
-                ]
-              : messages
-          }
+          data={messages}
           keyExtractor={(item, i) => item.id || i.toString()}
           renderItem={renderItem}
           contentContainerStyle={styles.msgList}
@@ -387,11 +344,7 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
 
         <View style={styles.inputBar}>
           <TouchableOpacity onPress={() => setShowSheet(true)}>
-            <Ionicons
-              name="apps"
-              size={theme.fontSizes.title}
-              color={theme.colors.primary}
-            />
+            <Ionicons name="apps" size={theme.fontSizes.title} color={theme.colors.primary} />
           </TouchableOpacity>
 
           <TextInput
@@ -406,6 +359,7 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+
       <CustomBottomSheet
         visible={showSheet}
         onClose={() => setShowSheet(false)}
