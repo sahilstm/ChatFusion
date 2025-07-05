@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   NavigationContainer,
   useNavigationContainerRef,
@@ -10,6 +10,8 @@ import { getFirestore, doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { getApps, initializeApp } from 'firebase/app';
 import axios from './src/utils/axiosInstance';
 import Toast from 'react-native-toast-message';
+import messaging from '@react-native-firebase/messaging';
+import notifee, { AndroidImportance } from '@notifee/react-native';
 import 'react-native-gesture-handler';
 
 import LoginScreen from './src/screens/auth/Login';
@@ -19,16 +21,12 @@ import ContactsScreen from './src/screens/Contact/Contacts';
 import ChatScreen from './src/screens/Chat/ChatScreen';
 import Splash from './src/screens/Splash/Splash';
 import ProfileSetupScreen from './src/screens/auth/ProfileSetup';
-
-import {
-  createNotificationChannel,
-  requestUserPermission,
-  setupForegroundMessageHandler,
-} from './src/config/NotificationService';
-import { firebaseConfig } from './src/config/firebase-config';
 import ImageEditorScreen from './src/screens/Image/ImageEditorScreen';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import CropImageScreen from './src/screens/Image/CropImageScreen';
+import VideoCallScreen from './src/shared/components/VideoCallScreen';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import IncomingCallScreen from './src/shared/components/IncomingCallScreen';
+import { onSnapshot, query, where, collection } from 'firebase/firestore';
 
 export type RootStackParamList = {
   Login: undefined;
@@ -37,38 +35,54 @@ export type RootStackParamList = {
   Contacts: undefined;
   Chat: { conversationId?: string };
   ProfileSetup: undefined;
+  ImageEditor: undefined;
+  CropImage: undefined;
+  VideoCallScreen: {
+    callId: string;
+    callerName?: string;
+    callerAvatar?: string;
+  };
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
-const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
+const app = getApps().length
+  ? getApps()[0]
+  : initializeApp(require('./src/config/firebase-config').firebaseConfig);
 const db = getFirestore(app);
 
 const App: React.FC = () => {
   const [initialRoute, setInitialRoute] = useState<
     keyof RootStackParamList | null
   >(null);
-  const [showSplash, setShowSplash] = useState<boolean>(true);
+  const [showSplash, setShowSplash] = useState(true);
   const [currentUser, setCurrentUser] = useState<any>(null);
+  const navigationRef = useNavigationContainerRef();
 
   const saveFcmToken = async () => {
-    const token = await requestUserPermission();
-    const userString = await AsyncStorage.getItem('user');
-    const user = userString ? JSON.parse(userString) : null;
+    const authStatus = await messaging().requestPermission();
+    const enabled =
+      authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
+      authStatus === messaging.AuthorizationStatus.PROVISIONAL;
 
-    if (!user?._id || !token) return;
+    if (!enabled) return;
 
-    await AsyncStorage.setItem(`fcm_${user._id}`, token);
+    const token = await messaging().getToken();
+    const userStr = await AsyncStorage.getItem('user');
+    const user = userStr ? JSON.parse(userStr) : null;
 
-    try {
-      await axios.post('/user/save-fcm', {
-        userId: user._id,
-        fcmToken: token,
-      });
-    } catch (error: any) {
-      console.error(
-        'Failed to save FCM token',
-        error?.response?.data || error.message,
-      );
+    if (user?._id && token) {
+      await AsyncStorage.setItem(`fcm_${user._id}`, token);
+      try {
+        await axios.post('/user/save-fcm', {
+          userId: user._id,
+          fcmToken: token,
+        });
+      } catch (err: any) {
+        console.error(
+          'Failed to save FCM token:',
+          err?.response?.data || err.message,
+        );
+      }
     }
   };
 
@@ -84,9 +98,8 @@ const App: React.FC = () => {
         },
         { merge: true },
       );
-      console.log(`Status ${isOnline ? 'Online' : 'Offline'}`);
     } catch (err) {
-      console.warn('Failed update status', err);
+      console.warn('Status update failed', err);
     }
   };
 
@@ -99,16 +112,14 @@ const App: React.FC = () => {
 
         if (token && user) {
           setCurrentUser(user);
-          if (!user.name || !user.about) {
-            setInitialRoute('ProfileSetup');
-          } else {
-            setInitialRoute('ChatList');
-          }
+          setInitialRoute(
+            user.name && user.about ? 'ChatList' : 'ProfileSetup',
+          );
         } else {
           setInitialRoute('Login');
         }
       } catch (e) {
-        console.error('Error checking AsyncStorage', e);
+        console.error('Auto-login error', e);
         setInitialRoute('Login');
       } finally {
         setShowSplash(false);
@@ -121,13 +132,13 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!currentUser?._id) return;
 
-    const onChange = (nextState: AppStateStatus) => {
-      updateUserStatus(nextState === 'active');
-    };
-
     updateUserStatus(true);
-
-    const sub = AppState.addEventListener('change', onChange);
+    const sub = AppState.addEventListener(
+      'change',
+      (nextState: AppStateStatus) => {
+        updateUserStatus(nextState === 'active');
+      },
+    );
 
     return () => {
       updateUserStatus(false);
@@ -136,18 +147,107 @@ const App: React.FC = () => {
   }, [currentUser]);
 
   useEffect(() => {
-    saveFcmToken();
-    createNotificationChannel();
-    setupForegroundMessageHandler();
+    const unsubscribe = messaging().onMessage(async remoteMessage => {
+      if (remoteMessage?.data?.type === 'video_call') {
+        await notifee.displayNotification({
+          title: `Incoming Video Call`,
+          body: `From ${remoteMessage.data.callerName || 'Unknown'}`,
+          android: {
+            channelId: 'default',
+            importance: AndroidImportance.HIGH,
+            fullScreenAction: {
+              id: 'default',
+            },
+            pressAction: {
+              id: 'default',
+            },
+          },
+        });
+      }
+    });
+    return () => unsubscribe();
   }, []);
 
-  if (showSplash || !initialRoute) {
-    return <Splash />;
-  }
+  useEffect(() => {
+    const unsubOpened = messaging().onNotificationOpenedApp(remoteMessage => {
+      if (remoteMessage?.data?.type === 'video_call') {
+        navigationRef.navigate('VideoCallScreen', {
+          callId: remoteMessage.data.callId,
+          callerName: remoteMessage.data.callerName,
+          callerAvatar: remoteMessage.data.callerAvatar,
+        });
+      }
+    });
+
+    messaging()
+      .getInitialNotification()
+      .then(remoteMessage => {
+        if (remoteMessage?.data?.type === 'video_call') {
+          navigationRef.navigate('VideoCallScreen', {
+            callId: remoteMessage.data.callId,
+            callerName: remoteMessage.data.callerName,
+            callerAvatar: remoteMessage.data.callerAvatar,
+          });
+        }
+      });
+
+    return () => unsubOpened();
+  }, []);
+
+  useEffect(() => {
+    if (!currentUser?._id) return;
+
+    const q = query(
+      collection(db, 'calls'),
+      where('receiverId', '==', currentUser._id),
+      where('status', '==', 'ringing'),
+    );
+
+    const unsubscribe = onSnapshot(q, snapshot => {
+      snapshot.docChanges().forEach(async change => {
+        if (change.type === 'added') {
+          const callData = change.doc.data();
+          const callId = change.doc.id;
+
+          if (AppState.currentState !== 'active') {
+            await notifee.displayNotification({
+              title: 'Incoming Call',
+              body: `From ${callData.callerName}`,
+              android: {
+                channelId: 'default',
+                importance: AndroidImportance.HIGH,
+                fullScreenAction: { id: 'default' },
+                pressAction: { id: 'default' },
+              },
+            });
+          }
+
+          navigationRef.navigate('IncomingCallScreen', {
+            callId,
+            callerName: callData.callerName,
+            callerAvatar: callData.callerAvatar || '',
+          });
+        }
+      });
+    });
+
+    return () => unsubscribe();
+  }, [currentUser]);
+
+  useEffect(() => {
+    notifee.createChannel({
+      id: 'default',
+      name: 'Default Channel',
+      importance: AndroidImportance.HIGH,
+    });
+    saveFcmToken();
+  }, []);
+
+  if (showSplash || !initialRoute) return <Splash />;
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <NavigationContainer>
+      <NavigationContainer ref={navigationRef}>
         <Stack.Navigator initialRouteName={initialRoute}>
           <Stack.Screen
             name="Login"
@@ -187,6 +287,16 @@ const App: React.FC = () => {
           <Stack.Screen
             name="CropImage"
             component={CropImageScreen}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="IncomingCallScreen"
+            component={IncomingCallScreen}
+            options={{ headerShown: false, presentation: 'fullScreenModal' }}
+          />
+          <Stack.Screen
+            name="VideoCallScreen"
+            component={VideoCallScreen}
             options={{ headerShown: false }}
           />
         </Stack.Navigator>

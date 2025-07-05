@@ -11,6 +11,7 @@ import {
   Animated,
   AppState,
   Image,
+  Alert,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import moment from 'moment';
@@ -34,6 +35,8 @@ import theme from '../../shared/constant/theme';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import CustomBottomSheet from '../../shared/components/CustomBottomSheet';
+import { RTCPeerConnection } from 'react-native-webrtc';
+console.log('RTCPeerConnection:', RTCPeerConnection);
 
 type Props = NativeStackScreenProps<any, 'Chat'>;
 
@@ -61,7 +64,9 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
   const [lastSeen, setLastSeen] = useState<any>(null);
   const [isReceiverTyping, setIsReceiverTyping] = useState(false);
   const [showSheet, setShowSheet] = useState(false);
-  const [typingTimeout, setTypingTimeout] = useState<NodeJS.Timeout | null>(null);
+  const [typingTimeout, setTypingTimeout] = useState<NodeJS.Timeout | null>(
+    null,
+  );
   const animRefs = useRef<Animated.Value[]>([]);
   const flatListRef = useRef<FlatList>(null);
 
@@ -88,17 +93,25 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
     const userStatusRef = doc(db, 'status', currentUser._id);
 
     const setOnline = async () => {
-      await setDoc(userStatusRef, {
-        isOnline: true,
-        lastSeen: serverTimestamp(),
-      }, { merge: true });
+      await setDoc(
+        userStatusRef,
+        {
+          isOnline: true,
+          lastSeen: serverTimestamp(),
+        },
+        { merge: true },
+      );
     };
 
     const setOffline = async () => {
-      await setDoc(userStatusRef, {
-        isOnline: false,
-        lastSeen: serverTimestamp(),
-      }, { merge: true });
+      await setDoc(
+        userStatusRef,
+        {
+          isOnline: false,
+          lastSeen: serverTimestamp(),
+        },
+        { merge: true },
+      );
     };
 
     setOnline();
@@ -144,7 +157,11 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
   useEffect(() => {
     if (!currentUser?._id || !receiver._id) return;
 
-    const typingDoc = doc(db, 'typing', `${receiver._id}_to_${currentUser._id}`);
+    const typingDoc = doc(
+      db,
+      'typing',
+      `${receiver._id}_to_${currentUser._id}`,
+    );
     const unsubscribe = onSnapshot(typingDoc, docSnap => {
       const data = docSnap.data();
       if (data?.userId === receiver._id && data?.isTyping) {
@@ -168,6 +185,21 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
       }).start();
     });
   }, [messages]);
+
+  useEffect(() => {
+    if (!receiver?._id) return;
+
+    const callDocRef = doc(db, 'calls', `${receiver._id}_${currentUser?._id}`);
+    const unsub = onSnapshot(callDocRef, docSnap => {
+      const data = docSnap.data();
+
+      if (data && data.status === 'ringing' && data.callerId === receiver._id) {
+        console.log('incoming call');
+      }
+    });
+
+    return () => unsub();
+  }, [receiver._id, currentUser?._id]);
 
   const sendMessage = async () => {
     if (!input.trim() || !currentUser) return;
@@ -195,7 +227,11 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
         fcmToken,
       });
 
-      const typingDoc = doc(db, 'typing', `${currentUser._id}_to_${receiver._id}`);
+      const typingDoc = doc(
+        db,
+        'typing',
+        `${currentUser._id}_to_${receiver._id}`,
+      );
       await setDoc(typingDoc, { isTyping: false }, { merge: true });
     } catch (err) {
       console.error('Failed to send message', err);
@@ -208,21 +244,33 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
     setInput(text);
     if (!currentUser || !receiver) return;
 
-    const typingDoc = doc(db, 'typing', `${currentUser._id}_to_${receiver._id}`);
+    const typingDoc = doc(
+      db,
+      'typing',
+      `${currentUser._id}_to_${receiver._id}`,
+    );
 
-    await setDoc(typingDoc, {
-      isTyping: !!text.trim(),
-      userId: currentUser._id,
-      timestamp: serverTimestamp(),
-    }, { merge: true });
+    await setDoc(
+      typingDoc,
+      {
+        isTyping: !!text.trim(),
+        userId: currentUser._id,
+        timestamp: serverTimestamp(),
+      },
+      { merge: true },
+    );
 
     if (typingTimeout) clearTimeout(typingTimeout);
 
     const timeout = setTimeout(() => {
-      setDoc(typingDoc, {
-        isTyping: false,
-        userId: currentUser._id,
-      }, { merge: true });
+      setDoc(
+        typingDoc,
+        {
+          isTyping: false,
+          userId: currentUser._id,
+        },
+        { merge: true },
+      );
     }, 5000);
 
     setTypingTimeout(timeout);
@@ -253,12 +301,22 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
           />
         )}
         {item.caption && (
-          <Text style={[styles.msgText, isMe ? styles.msgTextRight : styles.msgTextLeft]}>
+          <Text
+            style={[
+              styles.msgText,
+              isMe ? styles.msgTextRight : styles.msgTextLeft,
+            ]}
+          >
             {item.caption}
           </Text>
         )}
         {item.text && (
-          <Text style={[styles.msgText, isMe ? styles.msgTextRight : styles.msgTextLeft]}>
+          <Text
+            style={[
+              styles.msgText,
+              isMe ? styles.msgTextRight : styles.msgTextLeft,
+            ]}
+          >
             {item.text}
           </Text>
         )}
@@ -319,13 +377,41 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
 
           <View style={styles.iconRightContainer}>
             <TouchableOpacity onPress={() => console.log('Audio call')}>
-              <Ionicons name="call-outline" size={22} color={theme.colors.text} />
+              <Ionicons
+                name="call-outline"
+                size={22}
+                color={theme.colors.text}
+              />
             </TouchableOpacity>
             <TouchableOpacity
-              onPress={() => console.log('Video call')}
+              onPress={async () => {
+                if (!currentUser || !receiver) return;
+                const callId = `${currentUser._id}_${receiver._id}`;
+                const callRef = doc(db, 'calls', callId);
+
+                await setDoc(callRef, {
+                  callerId: currentUser._id,
+                  callerName: currentUser.name,
+                  callerAvatar: currentUser.avatar || '',
+
+                  receiverId: receiver._id,
+                  receiverName: receiver.name,
+                  receiverAvatar: receiver.avatar || '',
+
+                  status: 'ringing',
+                  type: 'video',
+                  timestamp: serverTimestamp(),
+                });
+
+                navigation.navigate('VideoCallScreen', { callId });
+              }}
               style={{ marginLeft: 16 }}
             >
-              <Ionicons name="videocam-outline" size={22} color={theme.colors.text} />
+              <Ionicons
+                name="videocam-outline"
+                size={22}
+                color={theme.colors.text}
+              />
             </TouchableOpacity>
           </View>
         </View>
@@ -344,7 +430,11 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
 
         <View style={styles.inputBar}>
           <TouchableOpacity onPress={() => setShowSheet(true)}>
-            <Ionicons name="apps" size={theme.fontSizes.title} color={theme.colors.primary} />
+            <Ionicons
+              name="apps"
+              size={theme.fontSizes.title}
+              color={theme.colors.primary}
+            />
           </TouchableOpacity>
 
           <TextInput
