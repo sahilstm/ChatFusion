@@ -15,15 +15,15 @@ import {
   RTCIceCandidate,
   RTCView,
   MediaStream,
-  MediaStreamTrack,
 } from 'react-native-webrtc';
 import {
   getFirestore,
   doc,
+  getDoc,
   onSnapshot,
   updateDoc,
-  getDoc,
-  arrayUnion,
+  collection,
+  addDoc,
 } from 'firebase/firestore';
 import { getApps, initializeApp } from 'firebase/app';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -47,102 +47,92 @@ interface Receiver {
 const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
-const configuration: RTCConfiguration = {
+const pcConfig: RTCConfiguration = {
   iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
     {
-      urls: 'turn:openrelay.metered.ca:80',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
+      urls: 'turn:relay1.expressturn.com:3480',
+      username: '000000002067070389',
+      credential: 'uRae3avC/FjGKgGHPMdVD1PgpO4=',
     },
   ],
 };
 
 const VideoCallScreen: React.FC<Props> = ({ route, navigation }) => {
   const { callId } = route.params;
-
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
-  const [status, setStatus] = useState<string>('calling');
   const [receiver, setReceiver] = useState<Receiver | null>(null);
-  const [usingFrontCamera, setUsingFrontCamera] = useState<boolean>(true);
+  const [status, setStatus] = useState<'calling' | 'ringing' | 'connected' | 'rejected' | 'ended'>('calling');
+  const [usingFrontCamera, setUsingFrontCamera] = useState(true);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
   const pc = useRef<RTCPeerConnection | null>(null);
   const unsubRef = useRef<() => void>();
+  const remoteICEUnsubRef = useRef<() => void>();
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const answeredRef = useRef<boolean>(false);
-  const addedCandidates = useRef<Set<string>>(new Set());
+  const answeredRef = useRef(false);
 
   const cleanupAndGoBack = () => {
-    try {
-      pc.current?.close();
-      pc.current = null;
-      localStream
-        ?.getTracks()
-        .forEach((track: MediaStreamTrack) => track.stop());
-    } catch (e) {
-      console.warn('cleanup error:', e);
-    }
+    console.log('[CLEANUP] Closing connection');
+    pc.current?.close();
+    pc.current = null;
+    localStream?.getTracks().forEach(track => track.stop());
+    unsubRef.current?.();
+    remoteICEUnsubRef.current?.();
     navigation.replace('ChatList');
   };
 
+  const getCurrentUser = async () => {
+    const userStr = await AsyncStorage.getItem('user');
+    const user = userStr ? JSON.parse(userStr) : null;
+    if (user?._id) setCurrentUserId(user._id);
+  };
+
   useEffect(() => {
-    const loadUser = async () => {
-      const userStr = await AsyncStorage.getItem('user');
-      const user = userStr ? JSON.parse(userStr) : null;
-      if (user?._id) setCurrentUserId(user._id);
-    };
-    loadUser();
+    getCurrentUser();
   }, []);
 
   useEffect(() => {
     if (!currentUserId) return;
 
-    const setup = async () => {
+    const setupCall = async () => {
       const callRef = doc(db, 'calls', callId);
-      const snap = await getDoc(callRef);
-      const data = snap.data();
-      if (!data) return;
+      const callSnap = await getDoc(callRef);
+      const callData = callSnap.data();
+      if (!callData) return;
 
-      const isCaller = currentUserId === data.callerId;
+      const isCaller = currentUserId === callData.callerId;
 
       setReceiver({
-        _id: isCaller ? data.receiverId : data.callerId,
-        name: isCaller ? data.receiverName : data.callerName,
-        avatar: isCaller ? data.receiverAvatar : data.callerAvatar,
+        _id: isCaller ? callData.receiverId : callData.callerId,
+        name: isCaller ? callData.receiverName : callData.callerName,
+        avatar: isCaller ? callData.receiverAvatar : callData.callerAvatar,
       });
 
-      pc.current = new RTCPeerConnection(configuration);
+      console.log('[INIT] Creating PeerConnection');
+      pc.current = new RTCPeerConnection(pcConfig);
 
       pc.current.onicecandidate = async event => {
         if (event.candidate) {
-          const field = isCaller ? 'callerCandidates' : 'receiverCandidates';
-          await updateDoc(callRef, {
-            [field]: arrayUnion(event.candidate.toJSON()),
-          });
+          const ref = collection(db, `calls/${callId}/${isCaller ? 'offerCandidates' : 'answerCandidates'}`);
+          await addDoc(ref, event.candidate.toJSON());
         }
       };
 
       pc.current.oniceconnectionstatechange = () => {
-        console.log('ICE connection state:', pc.current?.iceConnectionState);
+        console.log('[ICE] Connection State:', pc.current?.iceConnectionState);
       };
 
       pc.current.ontrack = event => {
-        if (event.streams?.[0]) {
-          setRemoteStream(event.streams[0]);
-        }
+        console.log('[TRACK] Remote stream received');
+        if (event.streams?.[0]) setRemoteStream(event.streams[0]);
       };
 
       const stream = await mediaDevices.getUserMedia({
         audio: true,
         video: {
           facingMode: usingFrontCamera ? 'user' : 'environment',
-          mandatory: {
-            minWidth: 640,
-            minHeight: 480,
-            minFrameRate: 30,
-          },
+          mandatory: { minWidth: 640, minHeight: 480, minFrameRate: 30 },
         },
       });
 
@@ -150,30 +140,20 @@ const VideoCallScreen: React.FC<Props> = ({ route, navigation }) => {
       stream.getTracks().forEach(track => pc.current?.addTrack(track, stream));
 
       unsubRef.current = onSnapshot(callRef, async snap => {
-        const upd = snap.data();
-        if (!upd) return;
+        const data = snap.data();
+        if (!data) return;
 
-        setStatus(upd.status);
+        setStatus(data.status);
 
-        if (upd.status === 'rejected' || upd.status === 'ended') {
-          Alert.alert(upd.status === 'ended' ? 'Call Ended' : 'Call Rejected');
+        if (['rejected', 'ended'].includes(data.status)) {
+          Alert.alert('Call ended', data.status);
           cleanupAndGoBack();
         }
 
-        if (upd.status === 'connected') {
-          answeredRef.current = true;
-        }
+        if (data.status === 'connected') answeredRef.current = true;
 
-        if (
-          upd.offer &&
-          !upd.answer &&
-          !isCaller &&
-          pc.current &&
-          !pc.current.remoteDescription
-        ) {
-          await pc.current.setRemoteDescription(
-            new RTCSessionDescription(upd.offer),
-          );
+        if (data.offer && !data.answer && !isCaller && pc.current && !pc.current.remoteDescription) {
+          await pc.current.setRemoteDescription(new RTCSessionDescription(data.offer));
           const answer = await pc.current.createAnswer();
           await pc.current.setLocalDescription(answer);
           await updateDoc(callRef, {
@@ -182,34 +162,27 @@ const VideoCallScreen: React.FC<Props> = ({ route, navigation }) => {
           });
         }
 
-        if (
-          upd.answer &&
-          isCaller &&
-          pc.current &&
-          !pc.current.currentRemoteDescription
-        ) {
-          await pc.current.setRemoteDescription(
-            new RTCSessionDescription(upd.answer),
-          );
-        }
-
-        const candidates = isCaller
-          ? upd.receiverCandidates
-          : upd.callerCandidates;
-        if (candidates) {
-          candidates.forEach((c: any) => {
-            const key = JSON.stringify(c);
-            if (!addedCandidates.current.has(key)) {
-              addedCandidates.current.add(key);
-              pc.current
-                ?.addIceCandidate(new RTCIceCandidate(c))
-                .catch(err => console.warn('ICE error', err));
-            }
-          });
+        if (data.answer && isCaller && pc.current && !pc.current.currentRemoteDescription) {
+          await pc.current.setRemoteDescription(new RTCSessionDescription(data.answer));
         }
       });
 
-      if (isCaller && !data.offer) {
+      const iceRef = collection(db, `calls/${callId}/${isCaller ? 'answerCandidates' : 'offerCandidates'}`);
+      remoteICEUnsubRef.current = onSnapshot(iceRef, snapshot => {
+        snapshot.docChanges().forEach(async change => {
+          if (change.type === 'added') {
+            const data = change.doc.data();
+            try {
+              await pc.current?.addIceCandidate(new RTCIceCandidate(data));
+              console.log('[ICE] Remote candidate added:', data);
+            } catch (e) {
+              console.warn('[ICE] Failed to add candidate:', e);
+            }
+          }
+        });
+      });
+
+      if (isCaller && !callData.offer) {
         const offer = await pc.current.createOffer();
         await pc.current.setLocalDescription(offer);
         await updateDoc(callRef, {
@@ -219,7 +192,7 @@ const VideoCallScreen: React.FC<Props> = ({ route, navigation }) => {
       }
     };
 
-    setup();
+    setupCall();
 
     timeoutRef.current = setTimeout(async () => {
       if (!answeredRef.current) {
@@ -232,8 +205,8 @@ const VideoCallScreen: React.FC<Props> = ({ route, navigation }) => {
     }, 30000);
 
     return () => {
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
-      unsubRef.current?.();
+      clearTimeout(timeoutRef.current!);
+      cleanupAndGoBack();
     };
   }, [currentUserId]);
 
@@ -246,11 +219,7 @@ const VideoCallScreen: React.FC<Props> = ({ route, navigation }) => {
       audio: true,
       video: {
         facingMode: newVal ? 'user' : 'environment',
-        mandatory: {
-          minWidth: 640,
-          minHeight: 480,
-          minFrameRate: 30,
-        },
+        mandatory: { minWidth: 640, minHeight: 480, minFrameRate: 30 },
       },
     });
 
@@ -268,40 +237,27 @@ const VideoCallScreen: React.FC<Props> = ({ route, navigation }) => {
     cleanupAndGoBack();
   };
 
-  const statusLabel =
-    {
-      ringing: 'Ringing...',
-      connected: 'Connected',
-      rejected: 'Rejected',
-      ended: 'Call Ended',
-    }[status] || 'Connecting...';
+  const statusLabel = {
+    calling: 'Calling...',
+    ringing: 'Ringing...',
+    connected: 'Connected',
+    rejected: 'Rejected',
+    ended: 'Call Ended',
+  }[status] ?? 'Connecting...';
 
   return (
     <View style={styles.container}>
       <StatusBar hidden />
       {remoteStream ? (
-        <RTCView
-          key={remoteStream.id}
-          streamURL={remoteStream.toURL()}
-          style={styles.remoteVideo}
-          objectFit="cover"
-        />
+        <RTCView streamURL={remoteStream.toURL()} style={styles.remoteVideo} objectFit="cover" />
       ) : (
         <View style={styles.fallback}>
-          <Text style={styles.connectingText}>
-            Waiting for remote stream...
-          </Text>
+          <Text style={styles.connectingText}>Waiting for remote stream...</Text>
         </View>
       )}
-
       {localStream && (
-        <RTCView
-          streamURL={localStream.toURL()}
-          style={styles.localVideo}
-          objectFit="cover"
-        />
+        <RTCView streamURL={localStream.toURL()} style={styles.localVideo} objectFit="cover" />
       )}
-
       <View style={styles.userInfo}>
         {receiver?.avatar?.startsWith('http') ? (
           <Image source={{ uri: receiver.avatar }} style={styles.avatarImage} />
@@ -311,13 +267,10 @@ const VideoCallScreen: React.FC<Props> = ({ route, navigation }) => {
           </View>
         )}
         <View>
-          <Text style={styles.nameText}>
-            {receiver?.name || 'Connecting...'}
-          </Text>
+          <Text style={styles.nameText}>{receiver?.name || 'Connecting...'}</Text>
           <Text style={styles.statusText}>{statusLabel}</Text>
         </View>
       </View>
-
       <View style={styles.controlsContainer}>
         <TouchableOpacity onPress={flipCamera} style={styles.flipButton}>
           <Ionicons name="camera-reverse" size={30} color="#fff" />

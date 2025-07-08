@@ -35,8 +35,6 @@ import theme from '../../shared/constant/theme';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import CustomBottomSheet from '../../shared/components/CustomBottomSheet';
-import { RTCPeerConnection } from 'react-native-webrtc';
-console.log('RTCPeerConnection:', RTCPeerConnection);
 
 type Props = NativeStackScreenProps<any, 'Chat'>;
 
@@ -186,20 +184,6 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
     });
   }, [messages]);
 
-  useEffect(() => {
-    if (!receiver?._id) return;
-
-    const callDocRef = doc(db, 'calls', `${receiver._id}_${currentUser?._id}`);
-    const unsub = onSnapshot(callDocRef, docSnap => {
-      const data = docSnap.data();
-
-      if (data && data.status === 'ringing' && data.callerId === receiver._id) {
-        console.log('incoming call');
-      }
-    });
-
-    return () => unsub();
-  }, [receiver._id, currentUser?._id]);
 
   const sendMessage = async () => {
     if (!input.trim() || !currentUser) return;
@@ -393,16 +377,21 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
                   callerId: currentUser._id,
                   callerName: currentUser.name,
                   callerAvatar: currentUser.avatar || '',
-
                   receiverId: receiver._id,
                   receiverName: receiver.name,
                   receiverAvatar: receiver.avatar || '',
-
                   status: 'ringing',
                   type: 'video',
                   timestamp: serverTimestamp(),
                 });
-
+                
+                await setDoc(doc(db, 'calls', callId, 'offerCandidates', callId), {
+                  candidates: [],
+                });
+                await setDoc(doc(db, 'calls', callId, 'answerCandidates', callId), {
+                  candidates: [],
+                });
+                
                 navigation.navigate('VideoCallScreen', { callId });
               }}
               style={{ marginLeft: 16 }}
