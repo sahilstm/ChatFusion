@@ -25,8 +25,6 @@ import ImageEditorScreen from './src/screens/Image/ImageEditorScreen';
 import CropImageScreen from './src/screens/Image/CropImageScreen';
 import VideoCallScreen from './src/shared/components/VideoCallScreen';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import IncomingCallScreen from './src/shared/components/IncomingCallScreen';
-import { onSnapshot, query, where, collection } from 'firebase/firestore';
 
 export type RootStackParamList = {
   Login: undefined;
@@ -147,94 +145,6 @@ const App: React.FC = () => {
   }, [currentUser]);
 
   useEffect(() => {
-    const unsubscribe = messaging().onMessage(async remoteMessage => {
-      if (remoteMessage?.data?.type === 'video_call') {
-        await notifee.displayNotification({
-          title: `Incoming Video Call`,
-          body: `From ${remoteMessage.data.callerName || 'Unknown'}`,
-          android: {
-            channelId: 'default',
-            importance: AndroidImportance.HIGH,
-            fullScreenAction: {
-              id: 'default',
-            },
-            pressAction: {
-              id: 'default',
-            },
-          },
-        });
-      }
-    });
-    return () => unsubscribe();
-  }, []);
-
-  useEffect(() => {
-    const unsubOpened = messaging().onNotificationOpenedApp(remoteMessage => {
-      if (remoteMessage?.data?.type === 'video_call') {
-        navigationRef.navigate('VideoCallScreen', {
-          callId: remoteMessage.data.callId,
-          callerName: remoteMessage.data.callerName,
-          callerAvatar: remoteMessage.data.callerAvatar,
-        });
-      }
-    });
-
-    messaging()
-      .getInitialNotification()
-      .then(remoteMessage => {
-        if (remoteMessage?.data?.type === 'video_call') {
-          navigationRef.navigate('VideoCallScreen', {
-            callId: remoteMessage.data.callId,
-            callerName: remoteMessage.data.callerName,
-            callerAvatar: remoteMessage.data.callerAvatar,
-          });
-        }
-      });
-
-    return () => unsubOpened();
-  }, []);
-
-  useEffect(() => {
-    if (!currentUser?._id) return;
-
-    const q = query(
-      collection(db, 'calls'),
-      where('receiverId', '==', currentUser._id),
-      where('status', '==', 'ringing'),
-    );
-
-    const unsubscribe = onSnapshot(q, snapshot => {
-      snapshot.docChanges().forEach(async change => {
-        if (change.type === 'added') {
-          const callData = change.doc.data();
-          const callId = change.doc.id;
-
-          if (AppState.currentState !== 'active') {
-            await notifee.displayNotification({
-              title: 'Incoming Call',
-              body: `From ${callData.callerName}`,
-              android: {
-                channelId: 'default',
-                importance: AndroidImportance.HIGH,
-                fullScreenAction: { id: 'default' },
-                pressAction: { id: 'default' },
-              },
-            });
-          }
-
-          navigationRef.navigate('IncomingCallScreen', {
-            callId,
-            callerName: callData.callerName,
-            callerAvatar: callData.callerAvatar || '',
-          });
-        }
-      });
-    });
-
-    return () => unsubscribe();
-  }, [currentUser]);
-
-  useEffect(() => {
     notifee.createChannel({
       id: 'default',
       name: 'Default Channel',
@@ -288,11 +198,6 @@ const App: React.FC = () => {
             name="CropImage"
             component={CropImageScreen}
             options={{ headerShown: false }}
-          />
-          <Stack.Screen
-            name="IncomingCallScreen"
-            component={IncomingCallScreen}
-            options={{ headerShown: false, presentation: 'fullScreenModal' }}
           />
           <Stack.Screen
             name="VideoCallScreen"

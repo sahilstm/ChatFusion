@@ -4,51 +4,25 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Image,
+  TextInput,
+  ScrollView,
   Alert,
-  StatusBar,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import Clipboard from '@react-native-clipboard/clipboard';
 import {
   mediaDevices,
   RTCPeerConnection,
-  RTCSessionDescription,
   RTCIceCandidate,
+  RTCSessionDescription,
   RTCView,
   MediaStream,
 } from 'react-native-webrtc';
-import {
-  getFirestore,
-  doc,
-  getDoc,
-  onSnapshot,
-  updateDoc,
-  collection,
-  addDoc,
-} from 'firebase/firestore';
-import { getApps, initializeApp } from 'firebase/app';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import Ionicons from 'react-native-vector-icons/Ionicons';
 import theme from '../constant/theme';
-import { firebaseConfig } from '../../config/firebase-config';
-import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
-type RootStackParamList = {
-  VideoCallScreen: { callId: string };
-};
-
-type Props = NativeStackScreenProps<RootStackParamList, 'VideoCallScreen'>;
-
-interface Receiver {
-  _id: string;
-  name: string;
-  avatar?: string;
-}
-
-const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
-const db = getFirestore(app);
-
-const pcConfig: RTCConfiguration = {
+const configuration = {
   iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
     {
       urls: 'turn:relay1.expressturn.com:3480',
       username: '000000002067070389',
@@ -57,323 +31,408 @@ const pcConfig: RTCConfiguration = {
   ],
 };
 
-const VideoCallScreen: React.FC<Props> = ({ route, navigation }) => {
-  const { callId } = route.params;
+const VideoCallScreen = () => {
+  const pcRef = useRef<RTCPeerConnection | null>(null);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
-  const [receiver, setReceiver] = useState<Receiver | null>(null);
-  const [status, setStatus] = useState<'calling' | 'ringing' | 'connected' | 'rejected' | 'ended'>('calling');
-  const [usingFrontCamera, setUsingFrontCamera] = useState(true);
-  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [sdp, setSdp] = useState('');
+  const [remoteSdp, setRemoteSdp] = useState('');
+  const [localCandidates, setLocalCandidates] = useState<string[]>([]);
+  const [remoteCandidates, setRemoteCandidates] = useState('');
 
-  const pc = useRef<RTCPeerConnection | null>(null);
-  const unsubRef = useRef<() => void>();
-  const remoteICEUnsubRef = useRef<() => void>();
-  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const answeredRef = useRef(false);
-
-  const cleanupAndGoBack = () => {
-    console.log('[CLEANUP] Closing connection');
-    pc.current?.close();
-    pc.current = null;
-    localStream?.getTracks().forEach(track => track.stop());
-    unsubRef.current?.();
-    remoteICEUnsubRef.current?.();
-    navigation.replace('ChatList');
+  const handleCopy = (label: string, content: string) => {
+    Clipboard.setString(content);
+    Alert.alert('Copied', `${label} copied to clipboard.`);
   };
 
-  const getCurrentUser = async () => {
-    const userStr = await AsyncStorage.getItem('user');
-    const user = userStr ? JSON.parse(userStr) : null;
-    if (user?._id) setCurrentUserId(user._id);
+  const setupConnection = () => {
+    const pc = pcRef.current;
+    if (!pc) return;
+
+    console.log('[INIT] Setting up PeerConnection event handlers');
+
+    pc.onicecandidate = event => {
+      if (event.candidate) {
+        const candidateStr = JSON.stringify(event.candidate);
+        console.log('[ICE] Local candidate:', candidateStr);
+        setLocalCandidates(prev =>
+          prev.includes(candidateStr) ? prev : [...prev, candidateStr],
+        );
+      } else {
+        console.log('[ICE] Candidate gathering complete.');
+      }
+    };
+
+    pc.onicegatheringstatechange = () => {
+      console.log('[ICE] Gathering State:', pc.iceGatheringState);
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      console.log('[ICE] Connection State:', pc.iceConnectionState);
+    };
+
+    pc.onsignalingstatechange = () => {
+      console.log('[SIGNALING] State:', pc.signalingState);
+    };
+
+    pc.onaddstream = event => {
+      console.log('[STREAM] Remote stream received via onaddstream');
+      setRemoteStream(event.stream);
+    };
   };
 
-  useEffect(() => {
-    getCurrentUser();
-  }, []);
-
-  useEffect(() => {
-    if (!currentUserId) return;
-
-    const setupCall = async () => {
-      const callRef = doc(db, 'calls', callId);
-      const callSnap = await getDoc(callRef);
-      const callData = callSnap.data();
-      if (!callData) return;
-
-      const isCaller = currentUserId === callData.callerId;
-
-      setReceiver({
-        _id: isCaller ? callData.receiverId : callData.callerId,
-        name: isCaller ? callData.receiverName : callData.callerName,
-        avatar: isCaller ? callData.receiverAvatar : callData.callerAvatar,
-      });
-
-      console.log('[INIT] Creating PeerConnection');
-      pc.current = new RTCPeerConnection(pcConfig);
-
-      pc.current.onicecandidate = async event => {
-        if (event.candidate) {
-          const ref = collection(db, `calls/${callId}/${isCaller ? 'offerCandidates' : 'answerCandidates'}`);
-          await addDoc(ref, event.candidate.toJSON());
-        }
-      };
-
-      pc.current.oniceconnectionstatechange = () => {
-        console.log('[ICE] Connection State:', pc.current?.iceConnectionState);
-      };
-
-      pc.current.ontrack = event => {
-        console.log('[TRACK] Remote stream received');
-        if (event.streams?.[0]) setRemoteStream(event.streams[0]);
-      };
-
+  const startCamera = async () => {
+    try {
+      console.log('[CAMERA] Requesting media...');
       const stream = await mediaDevices.getUserMedia({
         audio: true,
-        video: {
-          facingMode: usingFrontCamera ? 'user' : 'environment',
-          mandatory: { minWidth: 640, minHeight: 480, minFrameRate: 30 },
-        },
+        video: true,
       });
-
+      console.log('[CAMERA] Media stream received');
       setLocalStream(stream);
-      stream.getTracks().forEach(track => pc.current?.addTrack(track, stream));
 
-      unsubRef.current = onSnapshot(callRef, async snap => {
-        const data = snap.data();
-        if (!data) return;
-
-        setStatus(data.status);
-
-        if (['rejected', 'ended'].includes(data.status)) {
-          Alert.alert('Call ended', data.status);
-          cleanupAndGoBack();
-        }
-
-        if (data.status === 'connected') answeredRef.current = true;
-
-        if (data.offer && !data.answer && !isCaller && pc.current && !pc.current.remoteDescription) {
-          await pc.current.setRemoteDescription(new RTCSessionDescription(data.offer));
-          const answer = await pc.current.createAnswer();
-          await pc.current.setLocalDescription(answer);
-          await updateDoc(callRef, {
-            answer: JSON.parse(JSON.stringify(answer)),
-            status: 'connected',
-          });
-        }
-
-        if (data.answer && isCaller && pc.current && !pc.current.currentRemoteDescription) {
-          await pc.current.setRemoteDescription(new RTCSessionDescription(data.answer));
-        }
-      });
-
-      const iceRef = collection(db, `calls/${callId}/${isCaller ? 'answerCandidates' : 'offerCandidates'}`);
-      remoteICEUnsubRef.current = onSnapshot(iceRef, snapshot => {
-        snapshot.docChanges().forEach(async change => {
-          if (change.type === 'added') {
-            const data = change.doc.data();
-            try {
-              await pc.current?.addIceCandidate(new RTCIceCandidate(data));
-              console.log('[ICE] Remote candidate added:', data);
-            } catch (e) {
-              console.warn('[ICE] Failed to add candidate:', e);
-            }
-          }
-        });
-      });
-
-      if (isCaller && !callData.offer) {
-        const offer = await pc.current.createOffer();
-        await pc.current.setLocalDescription(offer);
-        await updateDoc(callRef, {
-          offer: JSON.parse(JSON.stringify(offer)),
-          status: 'ringing',
-        });
+      if (!pcRef.current) {
+        console.log('[PEER] Creating PeerConnection');
+        pcRef.current = new RTCPeerConnection(configuration);
+        setupConnection();
       }
-    };
 
-    setupCall();
-
-    timeoutRef.current = setTimeout(async () => {
-      if (!answeredRef.current) {
-        await updateDoc(doc(db, 'calls', callId), {
-          status: 'rejected',
-          autoRejected: true,
-        });
-        cleanupAndGoBack();
+      if (pcRef.current && stream) {
+        console.log('[PEER] Adding stream to connection');
+        pcRef.current.addStream(stream);
       }
-    }, 30000);
+    } catch (err) {
+      console.error('[CAMERA] Error accessing media:', err);
+    }
+  };
+
+  const createOffer = async () => {
+    try {
+      if (!pcRef.current) return;
+      console.log('[OFFER] Creating offer...');
+      const offer = await pcRef.current.createOffer();
+      await pcRef.current.setLocalDescription(offer);
+      console.log('[OFFER] Local description set');
+      setSdp(JSON.stringify(offer));
+    } catch (err) {
+      console.error('[OFFER] Error creating offer:', err);
+    }
+  };
+
+  const createAnswer = async () => {
+    try {
+      if (!pcRef.current || !pcRef.current.remoteDescription) {
+        Alert.alert('Remote SDP not set');
+        return;
+      }
+      console.log('[ANSWER] Creating answer...');
+      const answer = await pcRef.current.createAnswer();
+      await pcRef.current.setLocalDescription(answer);
+      console.log('[ANSWER] Local description set');
+      setSdp(JSON.stringify(answer));
+    } catch (err) {
+      console.error('[ANSWER] Error creating answer:', err);
+    }
+  };
+
+  const setRemoteDescription = async () => {
+    try {
+      const desc = new RTCSessionDescription(JSON.parse(remoteSdp));
+      console.log('[REMOTE SDP] Parsed:', desc);
+
+      if (
+        pcRef.current?.signalingState === 'have-local-offer' &&
+        desc.type === 'offer'
+      ) {
+        Alert.alert('Already created an offer. Cannot set another offer.');
+        return;
+      }
+
+      await pcRef.current?.setRemoteDescription(desc);
+      console.log('[REMOTE SDP] Set successfully');
+    } catch (err) {
+      console.error('[REMOTE SDP] Error:', err);
+      Alert.alert('Invalid or duplicate SDP');
+    }
+  };
+
+  const addRemoteCandidates = async () => {
+    if (!pcRef.current?.remoteDescription) {
+      Alert.alert('Remote SDP must be set before adding ICE candidates');
+      return;
+    }
+
+    console.log('[REMOTE ICE] Adding candidates...');
+    const lines = remoteCandidates
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean);
+
+    for (const line of lines) {
+      try {
+        const candidate = new RTCIceCandidate(JSON.parse(line));
+        await pcRef.current.addIceCandidate(candidate);
+        console.log('[REMOTE ICE] Candidate added:', candidate.candidate);
+      } catch (err) {
+        console.error('[REMOTE ICE] Error adding candidate:', err);
+      }
+    }
+  };
+
+  const resetPeerConnection = () => {
+    console.log('[RESET] Resetting PeerConnection');
+    pcRef.current?.close();
+    pcRef.current = new RTCPeerConnection(configuration);
+    setupConnection();
+
+    setSdp('');
+    setRemoteSdp('');
+    setLocalCandidates([]);
+    setRemoteCandidates('');
+    setLocalStream(null);
+    setRemoteStream(null);
+  };
+
+  useEffect(() => {
+    console.log('[INIT] Initializing PeerConnection');
+    pcRef.current = new RTCPeerConnection(configuration);
+    setupConnection();
 
     return () => {
-      clearTimeout(timeoutRef.current!);
-      cleanupAndGoBack();
+      console.log('[CLEANUP] Closing PeerConnection');
+      pcRef.current?.close();
+      pcRef.current = null;
+      localStream?.getTracks().forEach(track => {
+        console.log('[CLEANUP] Stopping track:', track.kind);
+        track.stop();
+      });
     };
-  }, [currentUserId]);
-
-  const flipCamera = async () => {
-    if (!pc.current?.getSenders) return;
-    const newVal = !usingFrontCamera;
-    setUsingFrontCamera(newVal);
-
-    const newStream = await mediaDevices.getUserMedia({
-      audio: true,
-      video: {
-        facingMode: newVal ? 'user' : 'environment',
-        mandatory: { minWidth: 640, minHeight: 480, minFrameRate: 30 },
-      },
-    });
-
-    const videoTrack = newStream.getVideoTracks()[0];
-    pc.current.getSenders().forEach(sender => {
-      if (sender.track?.kind === 'video') sender.replaceTrack(videoTrack);
-    });
-
-    localStream?.getTracks().forEach(track => track.stop());
-    setLocalStream(newStream);
-  };
-
-  const hangUp = async () => {
-    await updateDoc(doc(db, 'calls', callId), { status: 'ended' });
-    cleanupAndGoBack();
-  };
-
-  const statusLabel = {
-    calling: 'Calling...',
-    ringing: 'Ringing...',
-    connected: 'Connected',
-    rejected: 'Rejected',
-    ended: 'Call Ended',
-  }[status] ?? 'Connecting...';
+  }, []);
 
   return (
-    <View style={styles.container}>
-      <StatusBar hidden />
-      {remoteStream ? (
-        <RTCView streamURL={remoteStream.toURL()} style={styles.remoteVideo} objectFit="cover" />
-      ) : (
-        <View style={styles.fallback}>
-          <Text style={styles.connectingText}>Waiting for remote stream...</Text>
+    <SafeAreaView style={styles.safeArea}>
+      <ScrollView style={styles.container}>
+        <Text style={styles.heading}>
+          React Native WebRTC - Manual Signaling
+        </Text>
+
+        <View style={styles.section}>
+          <Text style={styles.subHeading}>Local Video</Text>
+          {localStream ? (
+            <RTCView
+              streamURL={localStream.toURL()}
+              style={styles.localVideo}
+              objectFit="cover"
+            />
+          ) : (
+            <Text style={styles.placeholder}>Camera not started</Text>
+          )}
         </View>
-      )}
-      {localStream && (
-        <RTCView streamURL={localStream.toURL()} style={styles.localVideo} objectFit="cover" />
-      )}
-      <View style={styles.userInfo}>
-        {receiver?.avatar?.startsWith('http') ? (
-          <Image source={{ uri: receiver.avatar }} style={styles.avatarImage} />
-        ) : (
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>{receiver?.name?.[0] || '?'}</Text>
-          </View>
-        )}
-        <View>
-          <Text style={styles.nameText}>{receiver?.name || 'Connecting...'}</Text>
-          <Text style={styles.statusText}>{statusLabel}</Text>
+
+        <View style={styles.section}>
+          <Text style={styles.subHeading}>Remote Video</Text>
+          {remoteStream ? (
+            <RTCView
+              streamURL={remoteStream.toURL()}
+              style={styles.remoteVideo}
+              objectFit="cover"
+            />
+          ) : (
+            <Text style={styles.placeholder}>No remote stream</Text>
+          )}
         </View>
-      </View>
-      <View style={styles.controlsContainer}>
-        <TouchableOpacity onPress={flipCamera} style={styles.flipButton}>
-          <Ionicons name="camera-reverse" size={30} color="#fff" />
-        </TouchableOpacity>
-        <TouchableOpacity onPress={hangUp} style={styles.hangupButton}>
-          <Ionicons name="call" size={30} color="#fff" />
-        </TouchableOpacity>
-      </View>
-    </View>
+
+        <View style={styles.buttonRow}>
+          <TouchableOpacity onPress={startCamera} style={styles.button}>
+            <Text style={styles.buttonText}>Start Camera</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={createOffer} style={styles.button}>
+            <Text style={styles.buttonText}>Create Offer</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={createAnswer} style={styles.button}>
+            <Text style={styles.buttonText}>Create Answer</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.buttonRow}>
+          <TouchableOpacity
+            onPress={setRemoteDescription}
+            style={styles.button}
+          >
+            <Text style={styles.buttonText}>Set Remote SDP</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={addRemoteCandidates} style={styles.button}>
+            <Text style={styles.buttonText}>Add Remote ICE</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={resetPeerConnection}
+            style={styles.buttonReset}
+          >
+            <Text style={styles.buttonText}>Reset</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.subHeading}>Local SDP</Text>
+          <TextInput style={styles.textArea} multiline value={sdp} />
+          <TouchableOpacity
+            style={styles.copyButton}
+            onPress={() => handleCopy('Local SDP', sdp)}
+          >
+            <Text style={styles.copyButtonText}>Copy Local SDP</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.subHeading}>Remote SDP</Text>
+          <TextInput
+            style={styles.textArea}
+            multiline
+            value={remoteSdp}
+            onChangeText={setRemoteSdp}
+          />
+          <TouchableOpacity
+            style={styles.copyButton}
+            onPress={() => handleCopy('Remote SDP', remoteSdp)}
+          >
+            <Text style={styles.copyButtonText}>Copy Remote SDP</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.subHeading}>Local ICE Candidates</Text>
+          <TextInput
+            style={styles.textArea}
+            multiline
+            value={localCandidates.join('\n')}
+          />
+          <TouchableOpacity
+            style={styles.copyButton}
+            onPress={() =>
+              handleCopy('Local ICE Candidates', localCandidates.join('\n'))
+            }
+          >
+            <Text style={styles.copyButtonText}>Copy Local ICE</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.subHeading}>Remote ICE Candidates</Text>
+          <TextInput
+            style={styles.textArea}
+            multiline
+            value={remoteCandidates}
+            onChangeText={setRemoteCandidates}
+          />
+          <TouchableOpacity
+            style={styles.copyButton}
+            onPress={() =>
+              handleCopy('Remote ICE Candidates', remoteCandidates)
+            }
+          >
+            <Text style={styles.copyButtonText}>Copy Remote ICE</Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+    </SafeAreaView>
   );
 };
 
-export default VideoCallScreen;
-
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.colors.dark },
-  remoteVideo: { flex: 1, backgroundColor: 'black' },
-  localVideo: {
-    width: 100,
-    height: 150,
-    position: 'absolute',
-    bottom: theme.spacing.l,
-    right: theme.spacing.l,
-    borderRadius: 20,
-    borderWidth: 2,
-    borderColor: theme.colors.white,
-    zIndex: 10,
-    overflow: 'hidden',
+  safeArea: {
+    flex: 1,
+    backgroundColor: theme.colors.dark,
   },
-  userInfo: {
-    position: 'absolute',
-    top: theme.spacing.l,
-    left: theme.spacing.l,
-    flexDirection: 'row',
-    alignItems: 'center',
-    zIndex: 100,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    padding: theme.spacing.s,
-    borderRadius: 12,
+  container: {
+    flex: 1,
+    padding: theme.spacing.m,
   },
-  avatar: {
-    backgroundColor: theme.colors.primary,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: theme.spacing.m,
-  },
-  avatarText: {
-    color: theme.colors.white,
+  heading: {
+    fontSize: theme.fontSizes.title,
     fontWeight: 'bold',
-    fontSize: theme.fontSizes.heading,
-  },
-  avatarImage: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    marginRight: theme.spacing.m,
-    borderWidth: 1.5,
-    borderColor: theme.colors.white,
-  },
-  nameText: {
     color: theme.colors.white,
-    fontSize: theme.fontSizes.body,
+    marginBottom: theme.spacing.m,
+    textAlign: 'center',
+  },
+  subHeading: {
+    fontSize: theme.fontSizes.heading,
+    fontWeight: '600',
+    color: theme.colors.light,
+    marginBottom: theme.spacing.s,
+  },
+  section: {
+    backgroundColor: '#1c1c1e',
+    padding: theme.spacing.s,
+    borderRadius: 10,
+    marginBottom: theme.spacing.m,
+  },
+  placeholder: {
+    height: 200,
+    backgroundColor: '#333',
+    color: theme.colors.subtext,
+    textAlign: 'center',
+    lineHeight: 200,
+  },
+  localVideo: {
+    width: '100%',
+    height: 200,
+    backgroundColor: '#333',
+    borderRadius: 8,
+  },
+  remoteVideo: {
+    width: '100%',
+    height: 200,
+    backgroundColor: '#333',
+    borderRadius: 8,
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginBottom: theme.spacing.s,
+  },
+  button: {
+    flex: 1,
+    backgroundColor: theme.colors.primary,
+    padding: theme.spacing.s,
+    borderRadius: 8,
+    marginHorizontal: 4,
+  },
+  buttonReset: {
+    flex: 1,
+    backgroundColor: theme.colors.error,
+    padding: theme.spacing.s,
+    borderRadius: 8,
+    marginHorizontal: 4,
+  },
+  buttonText: {
+    color: theme.colors.white,
+    textAlign: 'center',
     fontWeight: '600',
   },
-  statusText: {
-    color: theme.colors.subtext,
-    fontSize: theme.fontSizes.caption,
-    marginTop: 2,
+  textArea: {
+    backgroundColor: '#2a2a2a',
+    color: theme.colors.white,
+    borderRadius: 8,
+    padding: 10,
+    minHeight: 80,
+    maxHeight: 200,
+    textAlignVertical: 'top',
   },
-  controlsContainer: {
-    position: 'absolute',
-    bottom: theme.spacing.xl,
-    alignSelf: 'center',
-    alignItems: 'center',
-    flexDirection: 'row',
+  copyButton: {
+    marginTop: theme.spacing.s,
+    backgroundColor: theme.colors.success,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    alignSelf: 'flex-start',
   },
-  hangupButton: {
-    backgroundColor: theme.colors.error,
-    padding: theme.spacing.l,
-    borderRadius: 50,
-    alignItems: 'center',
-    justifyContent: 'center',
-    elevation: 4,
-  },
-  flipButton: {
-    backgroundColor: theme.colors.primary,
-    padding: theme.spacing.l,
-    borderRadius: 50,
-    alignItems: 'center',
-    justifyContent: 'center',
-    elevation: 4,
-    marginRight: 20,
-  },
-  fallback: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  connectingText: {
-    color: theme.colors.subtext,
-    fontSize: theme.fontSizes.heading,
+  copyButtonText: {
+    color: theme.colors.white,
+    fontWeight: '600',
+    fontSize: theme.fontSizes.small,
   },
 });
+
+export default VideoCallScreen;

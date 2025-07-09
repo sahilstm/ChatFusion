@@ -184,7 +184,6 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
     });
   }, [messages]);
 
-
   const sendMessage = async () => {
     if (!input.trim() || !currentUser) return;
 
@@ -369,30 +368,7 @@ const ChatScreen: React.FC<Props> = ({ route, navigation }) => {
             </TouchableOpacity>
             <TouchableOpacity
               onPress={async () => {
-                if (!currentUser || !receiver) return;
-                const callId = `${currentUser._id}_${receiver._id}`;
-                const callRef = doc(db, 'calls', callId);
-
-                await setDoc(callRef, {
-                  callerId: currentUser._id,
-                  callerName: currentUser.name,
-                  callerAvatar: currentUser.avatar || '',
-                  receiverId: receiver._id,
-                  receiverName: receiver.name,
-                  receiverAvatar: receiver.avatar || '',
-                  status: 'ringing',
-                  type: 'video',
-                  timestamp: serverTimestamp(),
-                });
-                
-                await setDoc(doc(db, 'calls', callId, 'offerCandidates', callId), {
-                  candidates: [],
-                });
-                await setDoc(doc(db, 'calls', callId, 'answerCandidates', callId), {
-                  candidates: [],
-                });
-                
-                navigation.navigate('VideoCallScreen', { callId });
+                navigation.navigate('VideoCallScreen');
               }}
               style={{ marginLeft: 16 }}
             >
